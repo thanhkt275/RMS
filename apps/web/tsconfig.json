@@ -1,4 +1,5 @@
 {
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "strict": true,
     "esModuleInterop": true,
@@ -8,18 +9,19 @@
     "moduleResolution": "Bundler",
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
-    "types": [
-      "vite/client"
-    ],
-    "rootDirs": [
-      "."
-    ],
+    "types": ["vite/client"],
+    "rootDirs": ["."],
     "baseUrl": ".",
     "paths": {
-      "@/*": [
-        "./src/*"
-      ]
+      "@/*": ["./src/*"],
+      "@rms-modern/auth": ["../../packages/auth"]
     },
-    "strictNullChecks": true
-  }
+    "strictNullChecks": true,
+    "lib": ["ESNext", "DOM"]
+  },
+  "references": [
+    {
+      "path": "../../packages/auth"
+    }
+  ]
 }

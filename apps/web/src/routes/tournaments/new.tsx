@@ -1,0 +1,596 @@
+import { useForm } from "@tanstack/react-form";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import {
+  createFileRoute,
+  Link,
+  redirect,
+  useNavigate,
+} from "@tanstack/react-router";
+import { toast } from "sonner";
+import { FieldErrors, FormField } from "@/components/form-field";
+import Loader from "@/components/loader";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { authClient } from "@/lib/auth-client";
+import { toDateTimeLocalValue } from "@/utils/date";
+import { queryClient } from "@/utils/query-client";
+import type { ScoreProfilesResponse } from "@/utils/score-profiles";
+import {
+  getResourceLabel,
+  getTournamentStatusMeta,
+  TOURNAMENT_RESOURCE_TYPES,
+  TOURNAMENT_STATUSES,
+  type TournamentResourceType,
+  type TournamentStatus,
+} from "@/utils/tournaments";
+import {
+  createResourceField,
+  mapFormValuesToPayload,
+  type ResourceField,
+  tournamentFormSchema,
+} from "./form-utils";
+
+export const Route = createFileRoute("/tournaments/new")({
+  component: CreateTournamentPage,
+  beforeLoad: async () => {
+    const session = await authClient.getSession();
+    if (!session.data || session.data.user.role !== "ADMIN") {
+      throw redirect({ to: "/tournaments" });
+    }
+    return { session };
+  },
+});
+
+function CreateTournamentPage() {
+  const { session } = Route.useRouteContext();
+  const navigate = useNavigate();
+  const isAdmin = session.data?.user.role === "ADMIN";
+
+  const scoreProfilesQuery = useQuery<ScoreProfilesResponse>({
+    queryKey: ["score-profiles"],
+    queryFn: async () => {
+      const response = await fetch(
+        `${import.meta.env.VITE_SERVER_URL}/api/score-profiles`,
+        { credentials: "include" }
+      );
+      if (!response.ok) {
+        throw new Error("Unable to load score profiles.");
+      }
+      return response.json() as Promise<ScoreProfilesResponse>;
+    },
+    enabled: isAdmin,
+  });
+
+  const createTournament = useMutation({
+    mutationFn: async (payload: Record<string, unknown>) => {
+      const response = await fetch(
+        `${import.meta.env.VITE_SERVER_URL}/api/tournaments`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          credentials: "include",
+          body: JSON.stringify(payload),
+        }
+      );
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.error || "Unable to create tournament");
+      }
+      return response.json() as Promise<{
+        id: string;
+        slug: string;
+        name: string;
+      }>;
+    },
+    onSuccess: async (data) => {
+      toast.success(`Tournament "${data.name}" created.`);
+      await queryClient.invalidateQueries({ queryKey: ["tournaments"] });
+      await navigate({
+        to: "/tournaments/$tournamentId",
+        params: { tournamentId: data.slug },
+      });
+    },
+    onError: (error) => {
+      toast.error(
+        error instanceof Error ? error.message : "Unable to save tournament."
+      );
+    },
+  });
+
+  const form = useForm({
+    defaultValues: {
+      name: "",
+      description: "",
+      organizer: "",
+      location: "",
+      season: "",
+      status: "UPCOMING" as TournamentStatus,
+      startDate: toDateTimeLocalValue(new Date().toISOString()),
+      endDate: toDateTimeLocalValue(
+        new Date(Date.now() + 86_400_000).toISOString()
+      ),
+      registrationDeadline: toDateTimeLocalValue(new Date().toISOString()),
+      announcement: "",
+      fieldCount: 1,
+      resources: [] as ResourceField[],
+      scoreProfileId: "",
+    },
+    validators: {
+      onSubmit: tournamentFormSchema,
+    },
+    onSubmit: async ({ value }) => {
+      if (!isAdmin) {
+        toast.error("Only admins can create tournaments.");
+        return;
+      }
+      await createTournament.mutateAsync(mapFormValuesToPayload(value));
+    },
+  });
+
+  if (!session.data) {
+    return <Loader />;
+  }
+
+  const scoreProfiles = scoreProfilesQuery.data?.items ?? [];
+  const scoreProfileSelectDisabled =
+    !isAdmin ||
+    createTournament.isPending ||
+    scoreProfilesQuery.isPending ||
+    Boolean(scoreProfilesQuery.error);
+
+  return (
+    <div className="container mx-auto max-w-4xl space-y-6 px-4 py-6">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h1 className="font-bold text-3xl">Create tournament</h1>
+          <p className="text-muted-foreground">
+            Publish a new event with key details, resources, and deadlines.
+          </p>
+        </div>
+        <Button asChild variant="ghost">
+          <Link search={{}} to="/tournaments">
+            Cancel
+          </Link>
+        </Button>
+      </div>
+
+      {!isAdmin && (
+        <Card className="border-destructive/40 bg-destructive/5">
+          <CardHeader>
+            <CardTitle>Access denied</CardTitle>
+            <CardDescription>
+              You need the ADMIN app role to publish tournaments.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Event details</CardTitle>
+          <CardDescription>All fields can be edited later.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form
+            className="space-y-6"
+            onSubmit={(event) => {
+              event.preventDefault();
+              form.handleSubmit();
+            }}
+          >
+            <div className="grid gap-4 md:grid-cols-2">
+              <form.Field name="name">
+                {(field) => (
+                  <FormField
+                    disabled={!isAdmin || createTournament.isPending}
+                    htmlFor={field.name}
+                    label="Tournament name"
+                    required
+                  >
+                    <Input
+                      id={field.name}
+                      onBlur={field.handleBlur}
+                      onChange={(event) =>
+                        field.handleChange(event.target.value)
+                      }
+                      value={field.state.value}
+                    />
+                    <FieldErrors errors={field.state.meta.errors} />
+                  </FormField>
+                )}
+              </form.Field>
+              <form.Field name="status">
+                {(field) => (
+                  <FormField
+                    disabled={!isAdmin || createTournament.isPending}
+                    htmlFor={field.name}
+                    label="Status"
+                    required
+                  >
+                    <Select
+                      id={field.name}
+                      onChange={(event) =>
+                        field.handleChange(
+                          event.target.value as TournamentStatus
+                        )
+                      }
+                      value={field.state.value}
+                    >
+                      {TOURNAMENT_STATUSES.map((status) => (
+                        <option key={status} value={status}>
+                          {getTournamentStatusMeta(status).label}
+                        </option>
+                      ))}
+                    </Select>
+                    <FieldErrors errors={field.state.meta.errors} />
+                  </FormField>
+                )}
+              </form.Field>
+            </div>
+
+            <form.Field name="description">
+              {(field) => (
+                <FormField
+                  disabled={!isAdmin || createTournament.isPending}
+                  htmlFor={field.name}
+                  label="Description"
+                >
+                  <Textarea
+                    id={field.name}
+                    onBlur={field.handleBlur}
+                    onChange={(event) => field.handleChange(event.target.value)}
+                    rows={4}
+                    value={field.state.value}
+                  />
+                  <FieldErrors errors={field.state.meta.errors} />
+                </FormField>
+              )}
+            </form.Field>
+
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              <form.Field name="organizer">
+                {(field) => (
+                  <FormField
+                    disabled={!isAdmin || createTournament.isPending}
+                    htmlFor={field.name}
+                    label="Organizer"
+                  >
+                    <Input
+                      id={field.name}
+                      onBlur={field.handleBlur}
+                      onChange={(event) =>
+                        field.handleChange(event.target.value)
+                      }
+                      value={field.state.value}
+                    />
+                  </FormField>
+                )}
+              </form.Field>
+              <form.Field name="season">
+                {(field) => (
+                  <FormField
+                    disabled={!isAdmin || createTournament.isPending}
+                    htmlFor={field.name}
+                    label="Season"
+                  >
+                    <Input
+                      id={field.name}
+                      onBlur={field.handleBlur}
+                      onChange={(event) =>
+                        field.handleChange(event.target.value)
+                      }
+                      value={field.state.value}
+                    />
+                  </FormField>
+                )}
+              </form.Field>
+              <form.Field name="fieldCount">
+                {(field) => (
+                  <FormField
+                    disabled={!isAdmin || createTournament.isPending}
+                    htmlFor={field.name}
+                    label="Fields available"
+                    required
+                  >
+                    <Input
+                      id={field.name}
+                      inputMode="numeric"
+                      max={50}
+                      min={1}
+                      onBlur={field.handleBlur}
+                      onChange={(event) => {
+                        const nextValue = Number(event.target.value);
+                        field.handleChange(
+                          Number.isNaN(nextValue) ? 1 : nextValue
+                        );
+                      }}
+                      type="number"
+                      value={field.state.value.toString()}
+                    />
+                    <FieldErrors errors={field.state.meta.errors} />
+                  </FormField>
+                )}
+              </form.Field>
+              <form.Field name="scoreProfileId">
+                {(field) => (
+                  <FormField
+                    description="Optional. Apply a reusable scoring model to every match in this tournament."
+                    disabled={scoreProfileSelectDisabled}
+                    htmlFor={field.name}
+                    label="Score profile"
+                  >
+                    <Select
+                      disabled={scoreProfileSelectDisabled}
+                      id={field.name}
+                      onChange={(event) =>
+                        field.handleChange(event.target.value)
+                      }
+                      value={field.state.value}
+                    >
+                      <option value="">No score profile</option>
+                      {scoreProfiles.map((profile) => (
+                        <option key={profile.id} value={profile.id}>
+                          {profile.name}
+                        </option>
+                      ))}
+                    </Select>
+                    {scoreProfilesQuery.isPending && (
+                      <p className="text-muted-foreground text-xs">
+                        Loading profiles&hellip;
+                      </p>
+                    )}
+                    {scoreProfilesQuery.error && (
+                      <p className="text-destructive text-xs">
+                        Unable to load score profiles.
+                      </p>
+                    )}
+                    <FieldErrors errors={field.state.meta.errors} />
+                  </FormField>
+                )}
+              </form.Field>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <form.Field name="startDate">
+                {(field) => (
+                  <FormField
+                    disabled={!isAdmin || createTournament.isPending}
+                    htmlFor={field.name}
+                    label="Start date"
+                    required
+                  >
+                    <Input
+                      id={field.name}
+                      onBlur={field.handleBlur}
+                      onChange={(event) =>
+                        field.handleChange(event.target.value)
+                      }
+                      type="datetime-local"
+                      value={field.state.value}
+                    />
+                    <FieldErrors errors={field.state.meta.errors} />
+                  </FormField>
+                )}
+              </form.Field>
+              <form.Field name="endDate">
+                {(field) => (
+                  <FormField
+                    disabled={!isAdmin || createTournament.isPending}
+                    htmlFor={field.name}
+                    label="End date"
+                    required
+                  >
+                    <Input
+                      id={field.name}
+                      onBlur={field.handleBlur}
+                      onChange={(event) =>
+                        field.handleChange(event.target.value)
+                      }
+                      type="datetime-local"
+                      value={field.state.value}
+                    />
+                    <FieldErrors errors={field.state.meta.errors} />
+                  </FormField>
+                )}
+              </form.Field>
+            </div>
+
+            <form.Field name="registrationDeadline">
+              {(field) => (
+                <FormField
+                  disabled={!isAdmin || createTournament.isPending}
+                  htmlFor={field.name}
+                  label="Registration deadline"
+                  required
+                >
+                  <Input
+                    id={field.name}
+                    onBlur={field.handleBlur}
+                    onChange={(event) => field.handleChange(event.target.value)}
+                    type="datetime-local"
+                    value={field.state.value}
+                  />
+                  <FieldErrors errors={field.state.meta.errors} />
+                </FormField>
+              )}
+            </form.Field>
+
+            <form.Field name="announcement">
+              {(field) => (
+                <FormField
+                  disabled={!isAdmin || createTournament.isPending}
+                  htmlFor={field.name}
+                  label="Announcement"
+                >
+                  <Textarea
+                    id={field.name}
+                    onBlur={field.handleBlur}
+                    onChange={(event) => field.handleChange(event.target.value)}
+                    rows={3}
+                    value={field.state.value}
+                  />
+                  <FieldErrors errors={field.state.meta.errors} />
+                </FormField>
+              )}
+            </form.Field>
+
+            <form.Field name="resources">
+              {(field) => (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="font-medium">Resources</p>
+                    <Button
+                      disabled={!isAdmin || createTournament.isPending}
+                      onClick={() =>
+                        field.handleChange([
+                          ...field.state.value,
+                          createResourceField(),
+                        ])
+                      }
+                      size="sm"
+                      type="button"
+                      variant="outline"
+                    >
+                      Add link
+                    </Button>
+                  </div>
+                  {field.state.meta.errors.length > 0 && (
+                    <FieldErrors errors={field.state.meta.errors} />
+                  )}
+                  {field.state.value.length === 0 && (
+                    <p className="text-muted-foreground text-sm">
+                      Share documents, law briefings, or manuals via public
+                      links.
+                    </p>
+                  )}
+                  {field.state.value.map((resource, index) => (
+                    <Card className="border-dashed" key={resource.id}>
+                      <CardContent className="space-y-3 p-4">
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <div>
+                            <LabelWithBadge label="Title" />
+                            <Input
+                              onChange={(event) => {
+                                const next = [...field.state.value];
+                                next[index] = {
+                                  ...next[index],
+                                  title: event.target.value,
+                                };
+                                field.handleChange(next);
+                              }}
+                              value={resource.title}
+                            />
+                          </div>
+                          <div>
+                            <LabelWithBadge label="Type" />
+                            <Select
+                              onChange={(event) => {
+                                const next = [...field.state.value];
+                                next[index] = {
+                                  ...next[index],
+                                  type: event.target
+                                    .value as TournamentResourceType,
+                                };
+                                field.handleChange(next);
+                              }}
+                              value={resource.type}
+                            >
+                              {TOURNAMENT_RESOURCE_TYPES.map((type) => (
+                                <option key={type} value={type}>
+                                  {getResourceLabel(type)}
+                                </option>
+                              ))}
+                            </Select>
+                          </div>
+                        </div>
+                        <div>
+                          <LabelWithBadge label="URL" />
+                          <Input
+                            onChange={(event) => {
+                              const next = [...field.state.value];
+                              next[index] = {
+                                ...next[index],
+                                url: event.target.value,
+                              };
+                              field.handleChange(next);
+                            }}
+                            placeholder="https://"
+                            type="url"
+                            value={resource.url}
+                          />
+                        </div>
+                        <div>
+                          <LabelWithBadge label="Summary" />
+                          <Textarea
+                            onChange={(event) => {
+                              const next = [...field.state.value];
+                              next[index] = {
+                                ...next[index],
+                                description: event.target.value,
+                              };
+                              field.handleChange(next);
+                            }}
+                            rows={2}
+                            value={resource.description}
+                          />
+                        </div>
+                        <div className="flex justify-end">
+                          <Button
+                            disabled={createTournament.isPending}
+                            onClick={() => {
+                              field.handleChange(
+                                field.state.value.filter((_, i) => i !== index)
+                              );
+                            }}
+                            size="sm"
+                            type="button"
+                            variant="ghost"
+                          >
+                            Remove
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </form.Field>
+
+            <div className="flex items-center justify-between">
+              <p className="text-muted-foreground text-sm">
+                Tournaments shared here are visible to everyone.
+              </p>
+              <Button
+                disabled={!isAdmin || createTournament.isPending}
+                type="submit"
+              >
+                {createTournament.isPending
+                  ? "Publishing..."
+                  : "Publish tournament"}
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function LabelWithBadge({ label }: { label: string }) {
+  return (
+    <div className="mb-1 flex items-center justify-between">
+      <p className="font-medium text-sm">{label}</p>
+    </div>
+  );
+}

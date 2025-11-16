@@ -24,6 +24,7 @@
     "better-auth": "catalog:",
     "dotenv": "catalog:",
     "zod": "catalog:",
-    "@rms-modern/db": "workspace:*"
+    "@rms-modern/db": "workspace:*",
+    "drizzle-orm": "0.44.2"
   }
 }

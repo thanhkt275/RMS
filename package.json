@@ -26,10 +26,12 @@
     "db:push": "turbo -F @rms-modern/db db:push",
     "db:studio": "turbo -F @rms-modern/db db:studio",
     "db:generate": "turbo -F @rms-modern/db db:generate",
-    "db:migrate": "turbo -F @rms-modern/db db:migrate"
+    "db:migrate": "turbo -F @rms-modern/db db:migrate",
+    "db:seed": "turbo -F @rms-modern/db db:seed"
   },
   "dependencies": {
     "dotenv": "^17.2.2",
+    "react-hook-form": "^7.66.0",
     "zod": "^4.1.11"
   },
   "devDependencies": {
