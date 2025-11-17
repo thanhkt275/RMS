@@ -104,7 +104,7 @@ function useTournamentList() {
     queryFn: async () => {
       const params = new URLSearchParams({
         page: "1",
-        sortField: "startDate",
+        sortBy: "startDate",
         sortDirection: "asc",
       });
       const response = await fetch(

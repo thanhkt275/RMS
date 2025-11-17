@@ -27,7 +27,15 @@
     "db:studio": "turbo -F @rms-modern/db db:studio",
     "db:generate": "turbo -F @rms-modern/db db:generate",
     "db:migrate": "turbo -F @rms-modern/db db:migrate",
-    "db:seed": "turbo -F @rms-modern/db db:seed"
+    "db:seed": "turbo -F @rms-modern/db db:seed",
+    "docker:prune:web": "turbo prune web --docker",
+    "docker:prune:server": "turbo prune server --docker",
+    "docker:build": "docker compose build",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f",
+    "docker:restart": "docker compose restart",
+    "docker:clean": "docker compose down -v && docker system prune -f"
   },
   "dependencies": {
     "dotenv": "^17.2.2",

@@ -69,8 +69,8 @@ type TournamentDetail = {
   announcement?: string | null;
   registeredTeams: number;
   fieldCount: number;
-  resources: TournamentResource[];
-  participants: TournamentParticipant[];
+  resources?: TournamentResource[];
+  participants?: TournamentParticipant[];
   scoreProfile?: {
     id: string;
     name: string;
@@ -92,7 +92,8 @@ function TournamentDetailPage() {
     queryKey: ["tournament", tournamentId],
     queryFn: async () => {
       const response = await fetch(
-        `${import.meta.env.VITE_SERVER_URL}/api/tournaments/${tournamentId}`
+        `${import.meta.env.VITE_SERVER_URL}/api/tournaments/${tournamentId}`,
+        { credentials: "include" }
       );
       if (!response.ok) {
         throw new Error("Tournament not found");
@@ -144,7 +145,6 @@ function TournamentDetailPage() {
           <Button asChild variant="secondary">
             <Link
               params={{ tournamentId: tournament.slug }}
-              search={{}}
               to="/tournaments/$tournamentId/register"
             >
               Register team
@@ -155,7 +155,6 @@ function TournamentDetailPage() {
               <Button asChild variant="secondary">
                 <Link
                   params={{ tournamentId: tournament.slug }}
-                  search={{}}
                   to="/tournaments/$tournamentId/field-roles"
                 >
                   Manage field roles
@@ -164,7 +163,6 @@ function TournamentDetailPage() {
               <Button asChild>
                 <Link
                   params={{ tournamentId: tournament.slug }}
-                  search={{}}
                   to="/tournaments/$tournamentId/edit"
                 >
                   Edit details
@@ -295,12 +293,12 @@ function TournamentDetailPage() {
             <FolderOpen className="h-5 w-5 text-muted-foreground" />
           </CardHeader>
           <CardContent className="space-y-3">
-            {tournament.resources.length === 0 && (
+            {tournament.resources?.length === 0 && (
               <p className="text-muted-foreground text-sm">
                 Organizers have not uploaded any resources yet.
               </p>
             )}
-            {tournament.resources.map((resource) => (
+            {tournament.resources?.map((resource) => (
               <a
                 className="flex items-start justify-between rounded-md border px-3 py-2 transition hover:bg-muted"
                 href={resource.url}
@@ -347,7 +345,7 @@ function TournamentDetailPage() {
                 </tr>
               </thead>
               <tbody>
-                {tournament.participants.length === 0 && (
+                {tournament.participants?.length === 0 && (
                   <tr>
                     <td
                       className="px-4 py-6 text-center text-muted-foreground"
@@ -357,7 +355,7 @@ function TournamentDetailPage() {
                     </td>
                   </tr>
                 )}
-                {tournament.participants.map((participant) => (
+                {tournament.participants?.map((participant) => (
                   <tr className="border-b last:border-0" key={participant.id}>
                     <td className="px-4 py-4">
                       {participant.teamSlug ? (

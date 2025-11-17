@@ -116,7 +116,7 @@ export const Route = createFileRoute("/tournaments/")({
 
 function useTournamentSearch() {
   const searchState = Route.useSearch();
-  const navigate = useNavigate({ from: "/tournaments" });
+  const navigate = useNavigate({ from: Route.fullPath });
   const [searchDraft, setSearchDraft] = useState(searchState.search);
 
   useEffect(() => {
@@ -189,14 +189,14 @@ function TournamentsPage() {
     changePage,
   } = useTournamentSearch();
   const { data: session } = authClient.useSession();
-  const isAdmin = session?.user.role === "ADMIN";
+  const isAdmin = (session?.user as { role?: string })?.role === "ADMIN";
 
   const listQuery = useQuery<TournamentsResponse>({
     queryKey: ["tournaments", searchState],
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set("page", searchState.page.toString());
-      params.set("sortField", searchState.sortField);
+      params.set("sortBy", searchState.sortField);
       params.set("sortDirection", searchState.sortDirection);
       if (searchState.search) {
         params.set("search", searchState.search);
@@ -206,7 +206,8 @@ function TournamentsPage() {
       }
 
       const response = await fetch(
-        `${import.meta.env.VITE_SERVER_URL}/api/tournaments?${params.toString()}`
+        `${import.meta.env.VITE_SERVER_URL}/api/tournaments?${params.toString()}`,
+        { credentials: "include" }
       );
       if (!response.ok) {
         throw new Error("Failed to fetch tournaments");
@@ -252,12 +253,12 @@ function TournamentsPage() {
         {isAdmin && (
           <div className="flex flex-wrap gap-2">
             <Button asChild variant="secondary">
-              <Link search={{}} to="/score-profiles">
+              <Link to="/score-profiles">
                 <Sparkles className="mr-2 h-4 w-4" /> Score profiles
               </Link>
             </Button>
             <Button asChild>
-              <Link search={{}} to="/tournaments/new">
+              <Link to="/tournaments/new">
                 <Plus className="mr-2 h-4 w-4" /> Create tournament
               </Link>
             </Button>
@@ -399,7 +400,6 @@ function TournamentsPage() {
                           <Button asChild size="icon" variant="ghost">
                             <Link
                               params={{ tournamentId: tournament.slug }}
-                              search={{}}
                               to="/tournaments/$tournamentId"
                             >
                               <Eye className="h-4 w-4" />
@@ -408,7 +408,6 @@ function TournamentsPage() {
                           <Button asChild size="icon" variant="ghost">
                             <Link
                               params={{ tournamentId: tournament.slug }}
-                              search={{}}
                               to="/tournaments/$tournamentId/stages"
                             >
                               <Flag className="h-4 w-4" />
@@ -417,7 +416,6 @@ function TournamentsPage() {
                           <Button asChild size="icon" variant="ghost">
                             <Link
                               params={{ tournamentId: tournament.slug }}
-                              search={{}}
                               to="/tournaments/$tournamentId/register"
                             >
                               <UserPlus className="h-4 w-4" />
@@ -427,7 +425,6 @@ function TournamentsPage() {
                             <Button asChild size="icon" variant="ghost">
                               <Link
                                 params={{ tournamentId: tournament.slug }}
-                                search={{}}
                                 to="/tournaments/$tournamentId/edit"
                               >
                                 <Pencil className="h-4 w-4" />

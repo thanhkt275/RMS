@@ -1,224 +1,130 @@
-import crypto from "node:crypto";
-import { db } from "@rms-modern/db";
+import { type AppDB, db } from "@rms-modern/db";
 import {
+  type organizations,
+  tournamentMatches,
   tournamentStageRankings,
+  tournamentStages,
+  tournamentStageTeams,
 } from "@rms-modern/db/schema/organization";
 import { eq } from "drizzle-orm";
 import {
-  fetchStageMatchesMap,
-  fetchStageTeamsMap,
+  parseScoreData,
+  recalculateStageRankings, // Exported from utils.ts
 } from "../routes/tournaments/utils";
-import type { StageRankingMatchSummary } from "../routes/tournaments/types";
-import { syncStageLeaderboard } from "./leaderboard";
-import { publishStageEvent } from "./stage-events";
 
-const RANKING_WIN_POINTS = 2;
-const RANKING_TIE_POINTS = 1;
+/**
+ * Fetches all matches for a given stage and returns them as a map for quick lookup.
+ */
+export async function fetchStageMatchesMap(stageId: string) {
+  const matches = await (db as AppDB)
+    .select()
+    .from(tournamentMatches)
+    .where(eq(tournamentMatches.stageId, stageId));
 
-type RankingAccumulator = {
-  organizationId: string;
-  seed: number | null;
-  teamName: string | null;
-  gamesPlayed: number;
-  wins: number;
-  losses: number;
-  ties: number;
-  totalScore: number;
-  totalAgainst: number;
-  autonomousPoints: number;
-  strengthPoints: number;
-  matchHistory: StageRankingMatchSummary[];
-};
-
-export async function recalculateStageRankings(stageId: string) {
-  const [teamsMap, matchesMap] = await Promise.all([
-    fetchStageTeamsMap([stageId]),
-    fetchStageMatchesMap([stageId]),
-  ]);
-  const teams = teamsMap.get(stageId) ?? [];
-  const teamInfoMap = new Map(teams.map((team) => [team.organizationId, team]));
-  const resolveOpponentName = (
-    id: string | null,
-    placeholder: string | null
-  ) => {
-    if (id) {
-      return teamInfoMap.get(id)?.teamName ?? placeholder ?? null;
-    }
-    return placeholder ?? null;
-  };
-
-  if (!teams.length) {
-    await db
-      .delete(tournamentStageRankings)
-      .where(eq(tournamentStageRankings.stageId, stageId));
-    await syncStageLeaderboard(stageId, []);
-    await publishStageEvent(stageId, "leaderboard.updated");
-    return;
-  }
-
-  const rankingMap = new Map<string, RankingAccumulator>();
-  for (const team of teams) {
-    rankingMap.set(team.organizationId, {
-      organizationId: team.organizationId,
-      seed: team.seed,
-      teamName: team.teamName,
-      gamesPlayed: 0,
-      wins: 0,
-      losses: 0,
-      ties: 0,
-      totalScore: 0,
-      totalAgainst: 0,
-      autonomousPoints: 0,
-      strengthPoints: 0,
-      matchHistory: [],
-    });
-  }
-
-  const matches = matchesMap.get(stageId) ?? [];
-  for (const match of matches) {
-    if (
-      match.status !== "COMPLETED" ||
-      typeof match.homeScore !== "number" ||
-      typeof match.awayScore !== "number" ||
-      match.homeTeamId === null ||
-      match.awayTeamId === null
-    ) {
-      continue;
-    }
-    const home = rankingMap.get(match.homeTeamId);
-    const away = rankingMap.get(match.awayTeamId);
-    if (!(home && away)) {
-      continue;
-    }
-    home.gamesPlayed += 1;
-    away.gamesPlayed += 1;
-    home.totalScore += match.homeScore;
-    away.totalScore += match.awayScore;
-
-    home.totalAgainst += match.awayScore;
-    away.totalAgainst += match.homeScore;
-
-    const homeOutcome: StageRankingMatchSummary["outcome"] =
-      match.homeScore > match.awayScore
-        ? "WIN"
-        : match.homeScore < match.awayScore
-          ? "LOSS"
-          : "TIE";
-    const awayOutcome: StageRankingMatchSummary["outcome"] =
-      homeOutcome === "WIN" ? "LOSS" : homeOutcome === "LOSS" ? "WIN" : "TIE";
-
-    home.matchHistory.push({
-      matchId: match.id,
-      opponentId: match.awayTeamId,
-      opponentName: resolveOpponentName(
-        match.awayTeamId,
-        match.awayPlaceholder
-      ),
-      scored: match.homeScore,
-      conceded: match.awayScore,
-      status: match.status,
-      outcome: homeOutcome,
-    });
-    away.matchHistory.push({
-      matchId: match.id,
-      opponentId: match.homeTeamId,
-      opponentName: resolveOpponentName(
-        match.homeTeamId,
-        match.homePlaceholder
-      ),
-      scored: match.awayScore,
-      conceded: match.homeScore,
-      status: match.status,
-      outcome: awayOutcome,
-    });
-
-    if (match.homeScore > match.awayScore) {
-      home.wins += 1;
-      away.losses += 1;
-    } else if (match.awayScore > match.homeScore) {
-      away.wins += 1;
-      home.losses += 1;
-    } else {
-      home.ties += 1;
-      away.ties += 1;
-    }
-
-    home.strengthPoints += match.awayScore;
-    away.strengthPoints += match.homeScore;
-  }
-
-  const rankings = Array.from(rankingMap.values()).map((entry) => {
-    const rankingPoints =
-      entry.wins * RANKING_WIN_POINTS + entry.ties * RANKING_TIE_POINTS;
-    const loseRate =
-      entry.gamesPlayed === 0 ? 0 : entry.losses / entry.gamesPlayed;
-    return {
-      ...entry,
-      rankingPoints,
-      loseRate,
-    };
-  });
-
-  rankings.sort((a, b) => {
-    if (b.rankingPoints !== a.rankingPoints) {
-      return b.rankingPoints - a.rankingPoints;
-    }
-    if (b.totalScore !== a.totalScore) {
-      return b.totalScore - a.totalScore;
-    }
-    if (a.loseRate !== b.loseRate) {
-      return a.loseRate - b.loseRate;
-    }
-    if (
-      typeof a.seed === "number" &&
-      typeof b.seed === "number" &&
-      a.seed !== b.seed
-    ) {
-      return a.seed - b.seed;
-    }
-    const nameA = a.teamName ?? "";
-    const nameB = b.teamName ?? "";
-    return nameA.localeCompare(nameB);
-  });
-
-  await db
-    .delete(tournamentStageRankings)
-    .where(eq(tournamentStageRankings.stageId, stageId));
-
-  if (!rankings.length) {
-    await syncStageLeaderboard(stageId, []);
-    await publishStageEvent(stageId, "leaderboard.updated");
-    return;
-  }
-
-  const rankingRecords = rankings.map((entry, index) => ({
-    id: crypto.randomUUID(),
-    stageId,
-    organizationId: entry.organizationId,
-    rank: index + 1,
-    gamesPlayed: entry.gamesPlayed,
-    wins: entry.wins,
-    losses: entry.losses,
-    ties: entry.ties,
-    rankingPoints: entry.rankingPoints,
-    autonomousPoints: entry.autonomousPoints,
-    strengthPoints: entry.strengthPoints,
-    totalScore: entry.totalScore,
-    scoreData: JSON.stringify({
-      totalFor: entry.totalScore,
-      totalAgainst: entry.totalAgainst,
-      matches: entry.matchHistory,
-    }),
-    loseRate: entry.loseRate,
-  }));
-
-  await db.insert(tournamentStageRankings).values(rankingRecords);
-  await syncStageLeaderboard(
-    stageId,
-    rankingRecords.map((record) => ({
-      organizationId: record.organizationId,
-      rank: record.rank,
-    }))
+  return new Map(
+    matches.map((match: typeof tournamentMatches.$inferSelect) => [
+      match.id,
+      match,
+    ])
   );
-  await publishStageEvent(stageId, "leaderboard.updated");
+}
+
+/**
+ * Fetches all teams for a given stage and returns them as a map for quick lookup.
+ */
+export async function fetchStageTeamsMap(stageId: string) {
+  const teams = await (db as AppDB).query.tournamentStageTeams.findMany({
+    where: eq(tournamentStageTeams.stageId, stageId), // Corrected table reference
+    with: {
+      organization: true,
+    },
+  });
+
+  return new Map(
+    teams.map(
+      (
+        team: typeof tournamentStageTeams.$inferSelect & {
+          organization: typeof organizations.$inferSelect;
+        }
+      ) => [
+        team.organizationId,
+        {
+          id: team.organizationId,
+          name: team.organization.name,
+          logo: team.organization.logo,
+          seed: team.seed,
+        },
+      ]
+    )
+  );
+}
+
+/**
+ * Fetches leaderboard rows for a specific stage.
+ */
+export async function fetchStageLeaderboardRows(stageId: string) {
+  const rankings = await (db as AppDB).query.tournamentStageRankings.findMany({
+    where: eq(tournamentStageRankings.stageId, stageId),
+    with: {
+      organization: true,
+    },
+    orderBy: (table, { asc }) => [asc(table.rank)],
+  });
+
+  return rankings.map((ranking) => ({
+    teamId: ranking.organizationId,
+    rank: ranking.rank,
+    score: ranking.totalScore,
+    tieBreaker: ranking.loseRate,
+    wins: ranking.wins,
+    losses: ranking.losses,
+    draws: ranking.ties,
+    matchesPlayed: ranking.gamesPlayed,
+    scoreData: parseScoreData(ranking.scoreData),
+    teamName: ranking.organization.name,
+    teamLogo: ranking.organization.logo,
+  }));
+}
+
+/**
+ * Reads the leaderboard order from stage configuration.
+ */
+export function readStageLeaderboardOrder(
+  stageConfiguration: string | null
+): string[] {
+  if (!stageConfiguration) {
+    return ["rank", "score", "tieBreaker", "wins", "losses", "draws"];
+  }
+  try {
+    const config = JSON.parse(stageConfiguration);
+    return (
+      config.leaderboardOrder || [
+        "rank",
+        "score",
+        "tieBreaker",
+        "wins",
+        "losses",
+        "draws",
+      ]
+    );
+  } catch {
+    return ["rank", "score", "tieBreaker", "wins", "losses", "draws"];
+  }
+}
+
+/**
+ * Synchronizes the stage leaderboard by recalculating rankings.
+ */
+export async function syncStageLeaderboard(stageId: string) {
+  const stage = await db.query.tournamentStages.findFirst({
+    where: eq(tournamentStages.id, stageId),
+  });
+
+  if (!stage) {
+    return;
+  }
+
+  await db.transaction(async (tx) => {
+    await recalculateStageRankings(tx, stage.id);
+  });
 }

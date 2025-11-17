@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import { eventsRoute } from "./events.routes";
 import { fieldsRoute } from "./fields.routes";
-import { leaderboardRoute } from "./leaderboard.routes";
 import { matchesRoute } from "./matches.routes";
 import { rankingsRoute } from "./rankings.routes";
 import { resourcesRoute } from "./resources.routes";
@@ -10,8 +9,6 @@ import { tournamentCoreRoute } from "./tournament-core.routes";
 
 const tournamentsRoute = new Hono();
 
-// Mount domain sub-routers on the root tournaments path.
-// Each sub-router will register endpoints like `/`, `/:identifier`, and `/ :identifier/stages`.
 tournamentsRoute.route("/", tournamentCoreRoute);
 tournamentsRoute.route("/", stagesRoute);
 tournamentsRoute.route("/", matchesRoute);
@@ -19,6 +16,5 @@ tournamentsRoute.route("/", rankingsRoute);
 tournamentsRoute.route("/", fieldsRoute);
 tournamentsRoute.route("/", resourcesRoute);
 tournamentsRoute.route("/", eventsRoute);
-tournamentsRoute.route("/", leaderboardRoute);
 
 export { tournamentsRoute };

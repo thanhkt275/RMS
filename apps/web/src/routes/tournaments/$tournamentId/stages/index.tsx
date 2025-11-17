@@ -141,7 +141,7 @@ type Stage = {
   name: string;
   type: string;
   status: TournamentStageStatus;
-  stageOrder: number;
+  order: number;
   createdAt: string | null;
   startedAt: string | null;
   completedAt: string | null;

@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { auth, type AuthUser } from "@rms-modern/auth";
+import { type AuthUser, auth } from "@rms-modern/auth";
 import { db } from "@rms-modern/db";
 import {
   scoreProfilePenaltyDirections,
@@ -8,8 +8,7 @@ import {
   tournaments,
 } from "@rms-modern/db/schema/organization";
 import { desc, eq, sql } from "drizzle-orm";
-import type { Context } from "hono";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { z } from "zod";
 
 const scoreProfilesRoute = new Hono();
@@ -86,7 +85,7 @@ type ScoreProfileRow = {
 async function fetchScoreProfileById(
   profileId: string
 ): Promise<ScoreProfileRow | null> {
-  const rows = (await db
+  const rows = await db
     .select({
       id: scoreProfiles.id,
       name: scoreProfiles.name,
@@ -100,8 +99,8 @@ async function fetchScoreProfileById(
     .leftJoin(tournaments, eq(tournaments.scoreProfileId, scoreProfiles.id))
     .where(eq(scoreProfiles.id, profileId))
     .groupBy(scoreProfiles.id)
-    .limit(1));
-  
+    .limit(1);
+
   if (!rows[0]) {
     return null;
   }
@@ -169,7 +168,7 @@ async function requireAdminSession(c: Context) {
   return session;
 }
 
-scoreProfilesRoute.get("/", async (c) => {
+scoreProfilesRoute.get("/", async (c: Context) => {
   try {
     const session = await requireAdminSession(c);
     if (!session) {
@@ -189,7 +188,7 @@ scoreProfilesRoute.get("/", async (c) => {
   }
 });
 
-scoreProfilesRoute.post("/", async (c) => {
+scoreProfilesRoute.post("/", async (c: Context) => {
   try {
     const session = await requireAdminSession(c);
     if (!session) {
@@ -225,7 +224,7 @@ scoreProfilesRoute.post("/", async (c) => {
   }
 });
 
-scoreProfilesRoute.get("/:id", async (c) => {
+scoreProfilesRoute.get("/:id", async (c: Context) => {
   try {
     const session = await requireAdminSession(c);
     if (!session) {
@@ -244,7 +243,7 @@ scoreProfilesRoute.get("/:id", async (c) => {
   }
 });
 
-scoreProfilesRoute.patch("/:id", async (c) => {
+scoreProfilesRoute.patch("/:id", async (c: Context) => {
   try {
     const session = await requireAdminSession(c);
     if (!session) {
@@ -293,7 +292,7 @@ scoreProfilesRoute.patch("/:id", async (c) => {
   }
 });
 
-scoreProfilesRoute.delete("/:id", async (c) => {
+scoreProfilesRoute.delete("/:id", async (c: Context) => {
   try {
     const session = await requireAdminSession(c);
     if (!session) {

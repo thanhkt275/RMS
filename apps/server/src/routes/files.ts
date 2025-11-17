@@ -1,13 +1,12 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { env } from "node:process";
-import { randomUUID } from "node:crypto";
 import { auth } from "@rms-modern/auth";
 import { db } from "@rms-modern/db";
 import { files } from "@rms-modern/db/schema/files";
 import { and, desc, eq, isNull } from "drizzle-orm";
-import type { Context } from "hono";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { formatS3Path, isS3Enabled, uploadFileToS3 } from "../utils/s3";
 
@@ -298,7 +297,7 @@ filesRoute.delete("/:id", async (c: Context) => {
 
 // Serve static files (for local development)
 if (USE_LOCAL_STORAGE) {
-  filesRoute.get("/serve/:fileName", async (c) => {
+  filesRoute.get("/serve/:fileName", async (c: Context) => {
     const { fileName } = c.req.param();
     const filePath = join(UPLOAD_DIR, fileName);
 
