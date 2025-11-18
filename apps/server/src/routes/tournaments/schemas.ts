@@ -145,6 +145,8 @@ export const matchUpdateSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional().nullable(), // Added
 });
 
+export type MatchUpdateInput = z.infer<typeof matchUpdateSchema>;
+
 const fieldRoleValueSchema = z.string().min(1).optional().nullable();
 
 const fieldRoleShape = Object.fromEntries(

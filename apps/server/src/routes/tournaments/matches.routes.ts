@@ -10,7 +10,12 @@ import { alias } from "drizzle-orm/sqlite-core";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { z } from "zod";
-import { matchGenerationSchema, matchUpdateSchema } from "./schemas";
+
+import {
+  type MatchUpdateInput,
+  matchGenerationSchema,
+  matchUpdateSchema,
+} from "./schemas";
 import type { MatchMetadata } from "./types";
 import {
   ensureScoresForCompletion,
@@ -27,14 +32,139 @@ const matchesRoute = new Hono<{ Bindings: Record<string, string> }>();
 const homeTeamAlias = alias(organizations, "home_team");
 const awayTeamAlias = alias(organizations, "away_team");
 
-async function ensureAdmin(
-  session: Awaited<ReturnType<typeof auth.api.getSession>>
-) {
+function generateMatchesByFormat(
+  format: string,
+  teamIds: string[],
+  options?: { doubleRoundRobin?: boolean }
+): {
+  id: string;
+  round: string;
+  homeTeamId: string | null;
+  awayTeamId: string | null;
+  homePlaceholder: string | null;
+  awayPlaceholder: string | null;
+  metadata: MatchMetadata;
+}[] {
+  if (format === "ROUND_ROBIN") {
+    const result = generateRoundRobinMatches(
+      teamIds,
+      options?.doubleRoundRobin ?? false
+    );
+    return result.generatedMatches;
+  }
+  if (format === "DOUBLE_ELIMINATION") {
+    const result = generateDoubleEliminationMatches(teamIds);
+    return result.generatedMatches;
+  }
+  throw new Error("Unsupported match format");
+}
+
+function buildMatchUpdateData(
+  body: MatchUpdateInput
+): Partial<typeof tournamentMatches.$inferInsert> {
+  const updateData: Partial<typeof tournamentMatches.$inferInsert> = {
+    updatedAt: new Date(),
+  };
+
+  if (body.status) {
+    updateData.status = body.status;
+  }
+  if (body.scheduledAt) {
+    updateData.scheduledAt = new Date(body.scheduledAt);
+  }
+  if (body.homeScore !== undefined) {
+    updateData.homeScore = body.homeScore;
+  }
+  if (body.awayScore !== undefined) {
+    updateData.awayScore = body.awayScore;
+  }
+  if (body.homeTeamId !== undefined) {
+    updateData.homeTeamId = body.homeTeamId;
+  }
+  if (body.awayTeamId !== undefined) {
+    updateData.awayTeamId = body.awayTeamId;
+  }
+  if (body.metadata !== undefined) {
+    updateData.metadata = body.metadata ? JSON.stringify(body.metadata) : null;
+  }
+
+  return updateData;
+}
+
+async function handleMatchUpdateTransaction(
+  typedTx: typeof db,
+  options: {
+    matchId: string;
+    updateData: Partial<typeof tournamentMatches.$inferInsert>;
+    body: MatchUpdateInput;
+    match: typeof tournamentMatches.$inferSelect;
+  }
+): Promise<void> {
+  const { matchId, updateData, body, match } = options;
+
+  await typedTx
+    .update(tournamentMatches)
+    .set(updateData)
+    .where(eq(tournamentMatches.id, matchId));
+
+  if (body.status !== "COMPLETED" || !match) {
+    return;
+  }
+
+  const homeScore =
+    updateData.homeScore !== undefined ? updateData.homeScore : match.homeScore;
+  const awayScore =
+    updateData.awayScore !== undefined ? updateData.awayScore : match.awayScore;
+
+  if (
+    homeScore === null ||
+    homeScore === undefined ||
+    awayScore === null ||
+    awayScore === undefined
+  ) {
+    throw new Error("Scores cannot be null for a completed match.");
+  }
+
+  await propagateMatchOutcome(typedTx, {
+    id: match.id,
+    stageId: match.stageId,
+    round: match.round,
+    status: "COMPLETED",
+    scheduledAt: updateData.scheduledAt ?? match.scheduledAt,
+    homeTeamId:
+      updateData.homeTeamId !== undefined
+        ? updateData.homeTeamId
+        : match.homeTeamId,
+    awayTeamId:
+      updateData.awayTeamId !== undefined
+        ? updateData.awayTeamId
+        : match.awayTeamId,
+    homePlaceholder: match.homePlaceholder,
+    awayPlaceholder: match.awayPlaceholder,
+    homeScore,
+    awayScore,
+    metadata:
+      updateData.metadata !== undefined ? updateData.metadata : match.metadata,
+    homeTeamName: null,
+    homeTeamSlug: null,
+    homeTeamLogo: null,
+    awayTeamName: null,
+    awayTeamSlug: null,
+    awayTeamLogo: null,
+  });
+}
+
+function ensureAdmin(
+  session: Awaited<ReturnType<typeof auth.api.getSession>> | null
+): asserts session is NonNullable<
+  Awaited<ReturnType<typeof auth.api.getSession>>
+> & {
+  user: { role: string };
+} {
   if (!session) {
     throw new Error("Forbidden");
   }
-  const userRecord = await auth.api.getUser(session.user.id);
-  if (userRecord?.role !== "ADMIN") {
+  if ((session.user as { role?: string }).role !== "ADMIN") {
     throw new Error("Forbidden");
   }
 }
@@ -43,7 +173,10 @@ matchesRoute.get(
   "/:tournamentId/stages/:stageId/matches",
   async (c: Context) => {
     try {
-      const { tournamentId, stageId } = c.req.param();
+      const { tournamentId, stageId } = c.req.param() as {
+        tournamentId: string;
+        stageId: string;
+      };
 
       const tournament = await getTournamentByIdentifier(tournamentId);
       if (!tournament) {
@@ -91,7 +224,7 @@ matchesRoute.get(
         );
 
       return c.json(
-        matches.map((match) => ({
+        matches.map((match: (typeof matches)[0]) => ({
           id: match.id,
           tournamentId: match.tournamentId,
           stageId: match.stageId,
@@ -133,7 +266,10 @@ matchesRoute.post(
         return c.json({ error: "Forbidden" }, 403);
       }
 
-      const { tournamentId, stageId } = c.req.param();
+      const { tournamentId, stageId } = c.req.param() as {
+        tournamentId: string;
+        stageId: string;
+      };
       const body = matchGenerationSchema.parse(await c.req.json());
 
       const tournament = await getTournamentByIdentifier(tournamentId);
@@ -151,34 +287,17 @@ matchesRoute.post(
         )
         .where(eq(tournamentStageTeams.stageId, stageId));
 
-      let generatedMatches: {
-        id: string;
-        round: string;
-        homeTeamId: string | null;
-        awayTeamId: string | null;
-        homePlaceholder: string | null;
-        awayPlaceholder: string | null;
-        metadata: MatchMetadata;
-      }[];
+      const teamIds = stageTeams.map((t: { id: string; name: string }) => t.id);
+      const generatedMatches = generateMatchesByFormat(
+        body.format,
+        teamIds,
+        body.options
+      );
 
-      if (body.format === "ROUND_ROBIN") {
-        const result = generateRoundRobinMatches(
-          stageTeams.map((t) => t.id),
-          body.options?.doubleRoundRobin ?? false
-        );
-        generatedMatches = result.generatedMatches;
-      } else if (body.format === "DOUBLE_ELIMINATION") {
-        const result = generateDoubleEliminationMatches(
-          stageTeams.map((t) => t.id)
-        );
-        generatedMatches = result.generatedMatches;
-      } else {
-        return c.json({ error: "Unsupported match format" }, 400);
-      }
-
-      await (db as AppDB).transaction(async (tx) => {
+      await (db as AppDB).transaction(async (tx: unknown) => {
+        const typedTx = tx as typeof db;
         // Delete existing matches for the stage
-        await tx
+        await typedTx
           .delete(tournamentMatches)
           .where(
             and(
@@ -189,8 +308,8 @@ matchesRoute.post(
 
         // Insert new matches
         if (generatedMatches.length > 0) {
-          await tx.insert(tournamentMatches).values(
-            generatedMatches.map((match) => ({
+          await typedTx.insert(tournamentMatches).values(
+            generatedMatches.map((match: (typeof generatedMatches)[0]) => ({
               id: match.id,
               tournamentId: tournament.id,
               stageId,
@@ -228,7 +347,11 @@ matchesRoute.patch(
         return c.json({ error: "Forbidden" }, 403);
       }
 
-      const { tournamentId, stageId, matchId } = c.req.param();
+      const { tournamentId, stageId, matchId } = c.req.param() as {
+        tournamentId: string;
+        stageId: string;
+        matchId: string;
+      };
       const body = matchUpdateSchema.parse(await c.req.json());
 
       const tournament = await getTournamentByIdentifier(tournamentId);
@@ -253,34 +376,7 @@ matchesRoute.patch(
       }
 
       const match = existingMatches[0] as (typeof existingMatches)[0];
-
-      const updateData: Partial<typeof tournamentMatches.$inferInsert> = {
-        updatedAt: new Date(),
-      };
-
-      if (body.status) {
-        updateData.status = body.status;
-      }
-      if (body.scheduledAt) {
-        updateData.scheduledAt = new Date(body.scheduledAt);
-      }
-      if (body.homeScore !== undefined) {
-        updateData.homeScore = body.homeScore;
-      }
-      if (body.awayScore !== undefined) {
-        updateData.awayScore = body.awayScore;
-      }
-      if (body.homeTeamId !== undefined) {
-        updateData.homeTeamId = body.homeTeamId;
-      }
-      if (body.awayTeamId !== undefined) {
-        updateData.awayTeamId = body.awayTeamId;
-      }
-      if (body.metadata !== undefined) {
-        updateData.metadata = body.metadata
-          ? JSON.stringify(body.metadata)
-          : null;
-      }
+      const updateData = buildMatchUpdateData(body);
 
       // If status is COMPLETED, ensure scores are present
       if (body.status === "COMPLETED") {
@@ -295,63 +391,14 @@ matchesRoute.patch(
         }
       }
 
-      await (db as AppDB).transaction(async (tx) => {
-        await tx
-          .update(tournamentMatches)
-          .set(updateData)
-          .where(eq(tournamentMatches.id, matchId));
-
-        // If match is completed, propagate outcome to dependent matches
-        if (body.status === "COMPLETED" && match) {
-          const homeScoreValue =
-            updateData.homeScore !== undefined
-              ? updateData.homeScore
-              : match.homeScore;
-          const awayScoreValue =
-            updateData.awayScore !== undefined
-              ? updateData.awayScore
-              : match.awayScore;
-
-          // `ensureScoresForCompletion` should prevent this, but this satisfies TS
-          if (
-            homeScoreValue === null ||
-            homeScoreValue === undefined ||
-            awayScoreValue === null ||
-            awayScoreValue === undefined
-          ) {
-            throw new Error("Scores cannot be null for a completed match.");
-          }
-
-          await propagateMatchOutcome(tx, {
-            id: match.id,
-            stageId: match.stageId,
-            round: match.round,
-            status: "COMPLETED",
-            scheduledAt: updateData.scheduledAt ?? match.scheduledAt,
-            homeTeamId:
-              updateData.homeTeamId !== undefined
-                ? updateData.homeTeamId
-                : match.homeTeamId,
-            awayTeamId:
-              updateData.awayTeamId !== undefined
-                ? updateData.awayTeamId
-                : match.awayTeamId,
-            homePlaceholder: match.homePlaceholder,
-            awayPlaceholder: match.awayPlaceholder,
-            homeScore: homeScoreValue,
-            awayScore: awayScoreValue,
-            metadata:
-              updateData.metadata !== undefined
-                ? updateData.metadata
-                : match.metadata,
-            homeTeamName: null,
-            homeTeamSlug: null,
-            homeTeamLogo: null,
-            awayTeamName: null,
-            awayTeamSlug: null,
-            awayTeamLogo: null,
-          });
-        }
+      await (db as AppDB).transaction(async (tx: unknown) => {
+        const typedTx = tx as typeof db;
+        await handleMatchUpdateTransaction(typedTx, {
+          matchId,
+          updateData,
+          body,
+          match,
+        });
       });
 
       return c.json({ success: true });
@@ -367,7 +414,7 @@ matchesRoute.patch(
 
 matchesRoute.get("/matches/:matchId", async (c: Context) => {
   try {
-    const { matchId } = c.req.param();
+    const { matchId } = c.req.param() as { matchId: string };
 
     const match = await (db as AppDB).query.tournamentMatches.findFirst({
       where: eq(tournamentMatches.id, matchId),

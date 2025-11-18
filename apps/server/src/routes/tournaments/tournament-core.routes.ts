@@ -18,11 +18,15 @@ import { applyWhereClause, getTournamentByIdentifier } from "./utils";
 
 const tournamentCoreRoute = new Hono();
 
-function ensureAdmin(session: Awaited<ReturnType<typeof auth.api.getSession>>) {
+function ensureAdmin(
+  session: Awaited<ReturnType<typeof auth.api.getSession>> | null
+): asserts session is NonNullable<Awaited<ReturnType<typeof auth.api.getSession>>> & {
+  user: { role: string };
+} {
   if (!session) {
     throw new Error("Forbidden");
   }
-  if (session.user.role !== "ADMIN") {
+  if ((session.user as { role?: string }).role !== "ADMIN") {
     throw new Error("Forbidden");
   }
 }
@@ -105,7 +109,7 @@ tournamentCoreRoute.get("/", async (c: Context) => {
     const totalItems = totalItemsResult[0]?.count ?? 0;
 
     return c.json({
-      items: items.map((item) => ({
+      items: items.map((item: typeof items[0]) => ({
         ...item,
         startDate: item.startDate?.toISOString() ?? null,
         endDate: item.endDate?.toISOString() ?? null,
@@ -189,7 +193,7 @@ tournamentCoreRoute.get("/admin/overview", async (c: Context) => {
         completed: completedTournaments[0]?.count ?? 0,
         totalRegistrations: totalRegistrations[0]?.count ?? 0,
       },
-      recentTournaments: recentTournaments.map((t) => ({
+      recentTournaments: recentTournaments.map((t: typeof recentTournaments[0]) => ({
         id: t.id,
         name: t.name,
         status: t.status as TournamentStatus,
@@ -315,6 +319,10 @@ tournamentCoreRoute.get("/:identifier", async (c: Context) => {
   try {
     const { identifier } = c.req.param();
 
+    if (!identifier) {
+      return c.json({ error: "Tournament identifier is required" }, 400);
+    }
+
     const tournament = await getTournamentByIdentifier(identifier);
 
     if (!tournament) {
@@ -348,14 +356,14 @@ tournamentCoreRoute.get("/:identifier", async (c: Context) => {
       endDate: tournament.endDate?.toISOString() ?? null,
       registrationDeadline:
         tournament.registrationDeadline?.toISOString() ?? null,
-      stages: stages.map((stage) => ({
+      stages: stages.map((stage: typeof stages[0]) => ({
         id: stage.id,
         name: stage.name,
         type: stage.type,
         status: stage.status,
         order: stage.stageOrder,
       })),
-      participants: participations.map((p) => ({
+      participants: participations.map((p: typeof participations[0]) => ({
         id: p.id,
         teamId: p.organizationId,
         teamName: p.organization.name,
@@ -368,7 +376,7 @@ tournamentCoreRoute.get("/:identifier", async (c: Context) => {
         record: p.record,
         notes: p.notes,
       })),
-      resources: resources.map((r) => ({
+      resources: resources.map((r: typeof resources[0]) => ({
         id: r.id,
         title: r.title,
         url: r.url,
@@ -397,6 +405,11 @@ tournamentCoreRoute.patch("/:identifier", async (c: Context) => {
     }
 
     const { identifier } = c.req.param();
+
+    if (!identifier) {
+      return c.json({ error: "Tournament identifier is required" }, 400);
+    }
+
     const body = tournamentUpdateSchema.parse(await c.req.json());
 
     const tournament = await getTournamentByIdentifier(identifier);
@@ -440,6 +453,11 @@ tournamentCoreRoute.post("/:identifier/register", async (c: Context) => {
     }
 
     const { identifier } = c.req.param();
+
+    if (!identifier) {
+      return c.json({ error: "Tournament identifier is required" }, 400);
+    }
+
     const { teamId } = await c.req.json();
 
     const tournament = await getTournamentByIdentifier(identifier);

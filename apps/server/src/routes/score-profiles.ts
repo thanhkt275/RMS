@@ -138,7 +138,7 @@ async function fetchScoreProfiles(search?: string): Promise<ScoreProfileRow[]> {
     .groupBy(scoreProfiles.id)
     .orderBy(desc(scoreProfiles.updatedAt));
 
-  return rows.map((row) => ({
+  return rows.map((row: typeof rows[0]) => ({
     ...row,
     usageCount: row.usageCount ?? 0,
   })) as ScoreProfileRow[];

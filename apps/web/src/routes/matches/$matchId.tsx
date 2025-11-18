@@ -87,7 +87,12 @@ function MatchDetailPage() {
           </CardHeader>
           <CardContent>
             <Button asChild>
-              <Link to="/tournaments">Back to Tournaments</Link>
+              <Link
+                search={{ page: 1, search: "", status: "ALL", sortField: "createdAt", sortDirection: "desc" }}
+                to="/tournaments"
+              >
+                Back to Tournaments
+              </Link>
             </Button>
           </CardContent>
         </Card>

@@ -27,14 +27,13 @@ import {
 
 const stagesRoute = new Hono();
 
-async function ensureAdmin(
-  session: Awaited<ReturnType<typeof auth.api.getSession>>
-) {
+function ensureAdmin(
+  session: Awaited<ReturnType<typeof auth.api.getSession>> | null
+): void {
   if (!session) {
     throw new Error("Forbidden");
   }
-  const userRecord = await auth.api.getUser(session.user.id);
-  if (userRecord?.role !== "ADMIN") {
+  if ((session.user as { role?: string }).role !== "ADMIN") {
     throw new Error("Forbidden");
   }
 }
@@ -52,6 +51,10 @@ function finalizeStageResponse(
 stagesRoute.get("/:tournamentId/stages", async (c: Context) => {
   try {
     const { tournamentId } = c.req.param();
+
+    if (typeof tournamentId !== "string") {
+      return c.json({ error: "Tournament ID is required" }, 400);
+    }
 
     const tournament = await getTournamentByIdentifier(tournamentId);
     if (!tournament) {
@@ -72,7 +75,7 @@ stagesRoute.get("/:tournamentId/stages", async (c: Context) => {
 
     // Fetch matches and rankings for each stage
     const stagesWithDetails = await Promise.all(
-      stages.map(async (stage) => {
+      stages.map(async (stage: typeof stages[0]) => {
         const [matches, rankings] = await Promise.all([
           (db as AppDB).query.tournamentMatches.findMany({
             where: eq(tournamentMatches.stageId, stage.id),
@@ -94,7 +97,7 @@ stagesRoute.get("/:tournamentId/stages", async (c: Context) => {
         return {
           ...baseStage,
           fieldCount: tournament.fieldCount ?? 1,
-          matches: matches.map((match) => ({
+          matches: matches.map((match: typeof matches[0]) => ({
             id: match.id,
             round: match.round,
             status: match.status,
@@ -119,7 +122,7 @@ stagesRoute.get("/:tournamentId/stages", async (c: Context) => {
             },
             metadata: match.metadata ? JSON.parse(match.metadata) : null,
           })),
-          rankings: rankings.map((ranking) => ({
+          rankings: rankings.map((ranking: typeof rankings[0]) => ({
             teamId: ranking.organizationId,
             name: ranking.organization.name,
             slug: ranking.organization.slug,
@@ -146,6 +149,10 @@ stagesRoute.get("/:tournamentId/stages", async (c: Context) => {
 stagesRoute.get("/:tournamentId/stages/:stageId", async (c: Context) => {
   try {
     const { tournamentId, stageId } = c.req.param();
+
+    if (typeof tournamentId !== "string" || typeof stageId !== "string") {
+      return c.json({ error: "Tournament ID and Stage ID are required" }, 400);
+    }
 
     const tournament = await getTournamentByIdentifier(tournamentId);
     if (!tournament) {
@@ -187,6 +194,11 @@ stagesRoute.post("/:tournamentId/stages", async (c: Context) => {
     }
 
     const { tournamentId } = c.req.param();
+
+    if (typeof tournamentId !== "string") {
+      return c.json({ error: "Tournament ID is required" }, 400);
+    }
+
     const body = stagePayloadSchema.parse(await c.req.json());
 
     const tournament = await getTournamentByIdentifier(tournamentId);
@@ -218,6 +230,11 @@ stagesRoute.patch("/:tournamentId/stages/:stageId", async (c: Context) => {
     }
 
     const { tournamentId, stageId } = c.req.param();
+
+    if (typeof tournamentId !== "string" || typeof stageId !== "string") {
+      return c.json({ error: "Tournament ID and Stage ID are required" }, 400);
+    }
+
     const body = stageUpdateSchema.parse(await c.req.json());
 
     const tournament = await getTournamentByIdentifier(tournamentId);
@@ -300,6 +317,10 @@ stagesRoute.delete("/:tournamentId/stages/:stageId", async (c: Context) => {
 
     const { tournamentId, stageId } = c.req.param();
 
+    if (typeof tournamentId !== "string" || typeof stageId !== "string") {
+      return c.json({ error: "Tournament ID and Stage ID are required" }, 400);
+    }
+
     const tournament = await getTournamentByIdentifier(tournamentId);
     if (!tournament) {
       return c.json({ error: "Tournament not found" }, 404);
@@ -333,6 +354,11 @@ stagesRoute.post(
       }
 
       const { tournamentId, stageId } = c.req.param();
+
+      if (typeof tournamentId !== "string" || typeof stageId !== "string") {
+        return c.json({ error: "Tournament ID and Stage ID are required" }, 400);
+      }
+
       const { teamIds } = await c.req.json();
 
       if (!Array.isArray(teamIds)) {
@@ -371,12 +397,16 @@ stagesRoute.post(
     try {
       const session = await auth.api.getSession({ headers: c.req.raw.headers });
       try {
-        await ensureAdmin(session);
+        ensureAdmin(session);
       } catch {
         return c.json({ error: "Forbidden" }, 403);
       }
 
       const { tournamentId, stageId } = c.req.param();
+
+      if (typeof tournamentId !== "string" || typeof stageId !== "string") {
+        return c.json({ error: "Tournament ID and Stage ID are required" }, 400);
+      }
 
       const tournament = await getTournamentByIdentifier(tournamentId);
       if (!tournament) {
@@ -432,7 +462,7 @@ stagesRoute.post(
         return c.json({ error: "Unsupported match format" }, 400);
       }
 
-      await db.transaction(async (tx) => {
+      await db.transaction(async (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
         // Delete existing matches for the stage
         await tx
           .delete(tournamentMatches)
@@ -446,7 +476,7 @@ stagesRoute.post(
         // Insert new matches
         if (generatedMatches.length > 0) {
           await tx.insert(tournamentMatches).values(
-            generatedMatches.map((match) => ({
+            generatedMatches.map((match: typeof generatedMatches[0]) => ({
               id: match.id,
               tournamentId: tournament.id,
               stageId,
@@ -493,12 +523,16 @@ stagesRoute.post("/:tournamentId/stages/:stageId/start", async (c: Context) => {
   try {
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
     try {
-      await ensureAdmin(session);
+      ensureAdmin(session);
     } catch {
       return c.json({ error: "Forbidden" }, 403);
     }
 
     const { tournamentId, stageId } = c.req.param();
+
+    if (typeof tournamentId !== "string" || typeof stageId !== "string") {
+      return c.json({ error: "Tournament ID and Stage ID are required" }, 400);
+    }
 
     const tournament = await getTournamentByIdentifier(tournamentId);
     if (!tournament) {
@@ -558,12 +592,16 @@ stagesRoute.post(
     try {
       const session = await auth.api.getSession({ headers: c.req.raw.headers });
       try {
-        await ensureAdmin(session);
+        ensureAdmin(session);
       } catch {
         return c.json({ error: "Forbidden" }, 403);
       }
 
       const { tournamentId, stageId } = c.req.param();
+
+      if (typeof tournamentId !== "string" || typeof stageId !== "string") {
+        return c.json({ error: "Tournament ID and Stage ID are required" }, 400);
+      }
 
       const tournament = await getTournamentByIdentifier(tournamentId);
       if (!tournament) {
@@ -584,7 +622,7 @@ stagesRoute.post(
       const warnings: string[] = [];
       await ensureStageIsCompletable(stage, warnings);
 
-      await (db as AppDB).transaction(async (tx) => {
+      await (db as AppDB).transaction(async (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
         await tx
           .update(tournamentStages)
           .set({ status: "COMPLETED", completedAt: new Date() })

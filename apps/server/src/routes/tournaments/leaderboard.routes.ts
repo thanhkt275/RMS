@@ -8,6 +8,10 @@ leaderboardRoute.get("/:tournamentId/leaderboard", async (c: Context) => {
   try {
     const { tournamentId } = c.req.param();
 
+    if (!tournamentId) {
+      return c.json({ error: "Tournament ID is required" }, 400);
+    }
+
     const tournament = await getTournamentByIdentifier(tournamentId);
     if (!tournament) {
       return c.json({ error: "Tournament not found" }, 404);

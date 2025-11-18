@@ -46,7 +46,7 @@ function ensureAdmin(
   if (!session) {
     throw new Error("Forbidden");
   }
-  if (session.user.role !== "ADMIN") {
+  if ((session.user as { role?: string | null }).role !== "ADMIN") {
     throw new Error("Forbidden");
   }
 }
@@ -284,7 +284,10 @@ fieldsRoute.get("/:slug/field-roles/users", async (c: Context) => {
 
 fieldsRoute.get("/:slug/field-roles", async (c: Context) => {
   try {
-    const { slug } = c.req.param();
+    const slug = c.req.param("slug");
+    if (!slug) {
+      return c.json({ error: "Slug is required" }, 400);
+    }
 
     const tournament = await getTournamentByIdentifier(slug);
 
@@ -336,7 +339,10 @@ fieldsRoute.post("/:slug/field-roles", async (c: Context) => {
       return c.json({ error: "Forbidden" }, 403);
     }
 
-    const { slug } = c.req.param();
+    const slug = c.req.param("slug");
+    if (!slug) {
+      return c.json({ error: "Slug is required" }, 400);
+    }
     const body = await c.req.json();
 
     const schema = z.object({
@@ -431,7 +437,10 @@ fieldsRoute.delete("/:slug/field-roles/:assignmentId", async (c: Context) => {
       return c.json({ error: "Forbidden" }, 403);
     }
 
-    const { assignmentId } = c.req.param();
+    const assignmentId = c.req.param("assignmentId");
+    if (!assignmentId) {
+      return c.json({ error: "Assignment ID is required" }, 400);
+    }
 
     await (db as AppDB)
       .delete(tournamentFieldAssignments)

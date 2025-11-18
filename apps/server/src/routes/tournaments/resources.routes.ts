@@ -14,21 +14,22 @@ import { getTournamentByIdentifier } from "./utils";
 
 const resourcesRoute = new Hono();
 
-async function ensureAdmin(
-  session: Awaited<ReturnType<typeof auth.api.getSession>>
-) {
+function ensureAdmin(
+  session: Awaited<ReturnType<typeof auth.api.getSession>> | null
+): asserts session is NonNullable<Awaited<ReturnType<typeof auth.api.getSession>>> & {
+  user: { role: string };
+} {
   if (!session) {
     throw new Error("Forbidden");
   }
-  const userRecord = await auth.api.getUser(session.user.id);
-  if (userRecord?.role !== "ADMIN") {
+  if ((session.user as { role?: string }).role !== "ADMIN") {
     throw new Error("Forbidden");
   }
 }
 
 resourcesRoute.get("/:tournamentId/resources", async (c: Context) => {
   try {
-    const { tournamentId } = c.req.param();
+    const { tournamentId } = c.req.param() as { tournamentId: string };
 
     const tournament = await getTournamentByIdentifier(tournamentId);
     if (!tournament) {
@@ -51,12 +52,12 @@ resourcesRoute.post("/:tournamentId/resources", async (c: Context) => {
   try {
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
     try {
-      await ensureAdmin(session);
+      ensureAdmin(session);
     } catch {
       return c.json({ error: "Forbidden" }, 403);
     }
 
-    const { tournamentId } = c.req.param();
+    const { tournamentId } = c.req.param() as { tournamentId: string };
     const body = tournamentResourceSchema.parse(await c.req.json());
 
     const tournament = await getTournamentByIdentifier(tournamentId);
@@ -91,12 +92,15 @@ resourcesRoute.patch(
     try {
       const session = await auth.api.getSession({ headers: c.req.raw.headers });
       try {
-        await ensureAdmin(session);
+        ensureAdmin(session);
       } catch {
         return c.json({ error: "Forbidden" }, 403);
       }
 
-      const { tournamentId, resourceId } = c.req.param();
+      const { tournamentId, resourceId } = c.req.param() as {
+        tournamentId: string;
+        resourceId: string;
+      };
       const body = tournamentResourceSchema.partial().parse(await c.req.json());
 
       const tournament = await getTournamentByIdentifier(tournamentId);
@@ -147,12 +151,15 @@ resourcesRoute.delete(
     try {
       const session = await auth.api.getSession({ headers: c.req.raw.headers });
       try {
-        await ensureAdmin(session);
+        ensureAdmin(session);
       } catch {
         return c.json({ error: "Forbidden" }, 403);
       }
 
-      const { tournamentId, resourceId } = c.req.param();
+      const { tournamentId, resourceId } = c.req.param() as {
+        tournamentId: string;
+        resourceId: string;
+      };
 
       const tournament = await getTournamentByIdentifier(tournamentId);
       if (!tournament) {
