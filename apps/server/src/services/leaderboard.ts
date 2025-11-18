@@ -1,118 +1,130 @@
-import { db } from "@rms-modern/db";
+import { type AppDB, db } from "@rms-modern/db";
 import {
-  organizations,
+  type organizations,
+  tournamentMatches,
   tournamentStageRankings,
+  tournamentStages,
   tournamentStageTeams,
 } from "@rms-modern/db/schema/organization";
-import { and, eq, inArray } from "drizzle-orm";
-import { getRedisClient } from "../lib/redis";
+import { eq } from "drizzle-orm";
+import {
+  parseScoreData,
+  recalculateStageRankings,
+} from "../routes/tournaments/utils";
 
-const STAGE_LEADERBOARD_PREFIX = "leaderboard:stage";
+/**
+ * Fetches all matches for a given stage and returns them as a map for quick lookup.
+ */
+export async function fetchStageMatchesMap(stageId: string) {
+  const matches = await (db as AppDB)
+    .select()
+    .from(tournamentMatches)
+    .where(eq(tournamentMatches.stageId, stageId));
 
-export type LeaderboardSyncEntry = {
-  organizationId: string;
-  rank: number;
-};
-
-export function getStageLeaderboardKey(stageId: string) {
-  return `${STAGE_LEADERBOARD_PREFIX}:${stageId}`;
+  return new Map(
+    matches.map((match: typeof tournamentMatches.$inferSelect) => [
+      match.id,
+      match,
+    ])
+  );
 }
 
-export async function syncStageLeaderboard(
-  stageId: string,
-  entries: LeaderboardSyncEntry[]
-) {
-  try {
-    const redis = await getRedisClient();
-    const leaderboardKey = getStageLeaderboardKey(stageId);
+/**
+ * Fetches all teams for a given stage and returns them as a map for quick lookup.
+ */
+export async function fetchStageTeamsMap(stageId: string) {
+  const teams = await (db as AppDB).query.tournamentStageTeams.findMany({
+    where: eq(tournamentStageTeams.stageId, stageId), // Corrected table reference
+    with: {
+      organization: true,
+    },
+  });
 
-    if (!entries.length) {
-      await redis.del(leaderboardKey);
-      return;
-    }
-
-    const totalEntries = entries.length + 1;
-    const serialized: Array<string | number> = [];
-    for (const entry of entries) {
-      const normalizedRank = entry.rank > 0 ? entry.rank : totalEntries;
-      const score = Math.max(totalEntries - normalizedRank, 0) + 1;
-      serialized.push(score.toString(), entry.organizationId);
-    }
-
-    await redis.del(leaderboardKey);
-    await redis.zadd(leaderboardKey, ...serialized);
-  } catch (error) {
-    console.error("Failed to sync stage leaderboard cache", error);
-  }
-}
-
-export async function readStageLeaderboardOrder(
-  stageId: string,
-  limit: number
-) {
-  try {
-    const redis = await getRedisClient();
-    const leaderboardKey = getStageLeaderboardKey(stageId);
-    const stop = limit > 0 ? limit - 1 : -1;
-
-    const members = await redis.zrevrange(leaderboardKey, 0, stop);
-    return members;
-  } catch (error) {
-    console.error("Failed to read stage leaderboard order", error);
-    return [];
-  }
-}
-
-export async function fetchStageLeaderboardRows(
-  stageId: string,
-  ids: string[]
-) {
-  if (!ids.length) {
-    return [];
-  }
-
-  const rows = await db
-    .select({
-      organizationId: tournamentStageRankings.organizationId,
-      stageId: tournamentStageRankings.stageId,
-      rank: tournamentStageRankings.rank,
-      gamesPlayed: tournamentStageRankings.gamesPlayed,
-      wins: tournamentStageRankings.wins,
-      losses: tournamentStageRankings.losses,
-      ties: tournamentStageRankings.ties,
-      rankingPoints: tournamentStageRankings.rankingPoints,
-      autonomousPoints: tournamentStageRankings.autonomousPoints,
-      strengthPoints: tournamentStageRankings.strengthPoints,
-      totalScore: tournamentStageRankings.totalScore,
-      scoreData: tournamentStageRankings.scoreData,
-      loseRate: tournamentStageRankings.loseRate,
-      teamName: organizations.name,
-      teamSlug: organizations.slug,
-      teamLogo: organizations.logo,
-      teamLocation: organizations.location,
-      seed: tournamentStageTeams.seed,
-    })
-    .from(tournamentStageRankings)
-    .leftJoin(
-      tournamentStageTeams,
-      and(
-        eq(tournamentStageTeams.stageId, tournamentStageRankings.stageId),
-        eq(
-          tournamentStageTeams.organizationId,
-          tournamentStageRankings.organizationId
-        )
-      )
+  return new Map(
+    teams.map(
+      (
+        team: typeof tournamentStageTeams.$inferSelect & {
+          organization: typeof organizations.$inferSelect;
+        }
+      ) => [
+        team.organizationId,
+        {
+          id: team.organizationId,
+          name: team.organization.name,
+          logo: team.organization.logo,
+          seed: team.seed,
+        },
+      ]
     )
-    .leftJoin(
-      organizations,
-      eq(tournamentStageRankings.organizationId, organizations.id)
-    )
-    .where(
-      and(
-        eq(tournamentStageRankings.stageId, stageId),
-        inArray(tournamentStageRankings.organizationId, ids)
-      )
+  );
+}
+
+/**
+ * Fetches leaderboard rows for a specific stage.
+ */
+export async function fetchStageLeaderboardRows(stageId: string) {
+  const rankings = await (db as AppDB).query.tournamentStageRankings.findMany({
+    where: eq(tournamentStageRankings.stageId, stageId),
+    with: {
+      organization: true,
+    },
+    orderBy: (table, { asc }) => [asc(table.rank)],
+  });
+
+  return rankings.map((ranking) => ({
+    organizationId: ranking.organizationId,
+    rank: ranking.rank,
+    score: ranking.totalScore,
+    tieBreaker: ranking.loseRate,
+    wins: ranking.wins,
+    losses: ranking.losses,
+    draws: ranking.ties,
+    matchesPlayed: ranking.gamesPlayed,
+    scoreData: parseScoreData(ranking.scoreData),
+    teamName: ranking.organization.name,
+    teamLogo: ranking.organization.logo,
+  }));
+}
+
+/**
+ * Reads the leaderboard order from stage configuration.
+ */
+export function readStageLeaderboardOrder(
+  stageConfiguration: string | null
+): string[] {
+  if (!stageConfiguration) {
+    return ["rank", "score", "tieBreaker", "wins", "losses", "draws"];
+  }
+  try {
+    const config = JSON.parse(stageConfiguration);
+    return (
+      config.leaderboardOrder || [
+        "rank",
+        "score",
+        "tieBreaker",
+        "wins",
+        "losses",
+        "draws",
+      ]
     );
+  } catch {
+    return ["rank", "score", "tieBreaker", "wins", "losses", "draws"];
+  }
+}
 
-  return rows;
+/**
+ * Synchronizes the stage leaderboard by recalculating rankings.
+ */
+export async function syncStageLeaderboard(stageId: string) {
+  const stage = await db.query.tournamentStages.findFirst({
+    where: eq(tournamentStages.id, stageId),
+  });
+
+  if (!stage) {
+    return;
+  }
+
+  await db.transaction(async (tx) => {
+    await recalculateStageRankings(tx, stage.id);
+  });
 }

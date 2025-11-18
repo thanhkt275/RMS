@@ -158,6 +158,47 @@ function useStageMatches(tournamentId: string, stageId: string) {
   });
 }
 
+function handleEventMessage(
+  payload: StageEventMessage,
+  context: {
+    queryClient: ReturnType<typeof useQueryClient>;
+    tournamentId: string;
+    stageId: string;
+    setStatus: (next: LiveStreamStatus) => void;
+  }
+) {
+  const { queryClient, tournamentId, stageId, setStatus } = context;
+
+  if (payload.type === "connected") {
+    setStatus("connected");
+    return;
+  }
+  if (payload.type === "heartbeat") {
+    return;
+  }
+  if (payload.type === "leaderboard.updated") {
+    queryClient.invalidateQueries({
+      queryKey: ["stage-leaderboard", tournamentId, stageId],
+    });
+  }
+  if (payload.type === "matches.updated") {
+    queryClient.invalidateQueries({
+      queryKey: ["stage-matches", tournamentId, stageId],
+    });
+  }
+  if (payload.type === "stage.updated") {
+    queryClient.invalidateQueries({
+      queryKey: ["stage-detail", tournamentId, stageId],
+    });
+    queryClient.invalidateQueries({
+      queryKey: ["stage-matches", tournamentId, stageId],
+    });
+  }
+  if (payload.type === "error") {
+    setStatus("error");
+  }
+}
+
 function useStageEventStream(
   tournamentId: string,
   stageId: string,
@@ -179,34 +220,12 @@ function useStageEventStream(
       }
       try {
         const payload = JSON.parse(event.data) as StageEventMessage;
-        if (payload.type === "connected") {
-          setStatus("connected");
-          return;
-        }
-        if (payload.type === "heartbeat") {
-          return;
-        }
-        if (payload.type === "leaderboard.updated") {
-          queryClient.invalidateQueries({
-            queryKey: ["stage-leaderboard", tournamentId, stageId],
-          });
-        }
-        if (payload.type === "matches.updated") {
-          queryClient.invalidateQueries({
-            queryKey: ["stage-matches", tournamentId, stageId],
-          });
-        }
-        if (payload.type === "stage.updated") {
-          queryClient.invalidateQueries({
-            queryKey: ["stage-detail", tournamentId, stageId],
-          });
-          queryClient.invalidateQueries({
-            queryKey: ["stage-matches", tournamentId, stageId],
-          });
-        }
-        if (payload.type === "error") {
-          setStatus("error");
-        }
+        handleEventMessage(payload, {
+          queryClient,
+          tournamentId,
+          stageId,
+          setStatus,
+        });
       } catch {
         setStatus("error");
       }
@@ -237,6 +256,115 @@ const streamStatusMeta: Record<
   error: { label: "Reconnecting…", className: "bg-destructive" },
 };
 
+function ErrorView({ errorMessage }: { errorMessage: string }) {
+  return (
+    <div className="container mx-auto max-w-5xl space-y-4 px-4 py-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Unable to load live view</CardTitle>
+          <CardDescription>{errorMessage}</CardDescription>
+        </CardHeader>
+      </Card>
+    </div>
+  );
+}
+
+function getMatchWinner(
+  homeScore: number | null,
+  awayScore: number | null
+): "home" | "away" | null {
+  if (homeScore === null || awayScore === null) {
+    return null;
+  }
+  if (homeScore > awayScore) {
+    return "home";
+  }
+  if (homeScore < awayScore) {
+    return "away";
+  }
+  return null;
+}
+
+function MatchRow({ match }: { match: StageMatch }) {
+  const homeScore = match.score.home;
+  const awayScore = match.score.away;
+  const winner = getMatchWinner(homeScore, awayScore);
+
+  const statusLabel = getMatchStatusLabel(match.status);
+  const scheduledDisplay = match.scheduledAt
+    ? formatDateTime(new Date(match.scheduledAt))
+    : "TBD";
+  const homeDisplay = match.home.slug ?? match.home.placeholder ?? "—";
+  const awayDisplay = match.away.slug ?? match.away.placeholder ?? "—";
+
+  return (
+    <tr className="border-b last:border-0" key={match.id}>
+      <td className="px-2 py-3 text-muted-foreground text-xs">
+        {match.round ?? "—"}
+      </td>
+      <td className="px-2 py-3 text-muted-foreground text-xs">
+        {match.metadata?.fieldNumber
+          ? `Field ${match.metadata.fieldNumber}`
+          : "—"}
+      </td>
+      <td className="px-2 py-3 text-muted-foreground text-xs">
+        {match.metadata?.label ?? match.metadata?.matchIndex ?? "—"}
+      </td>
+      <td className="px-2 py-3 text-muted-foreground text-xs">{statusLabel}</td>
+      <td className="px-2 py-3 text-muted-foreground text-xs">
+        {scheduledDisplay}
+      </td>
+      <td className="px-2 py-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p
+              className={cn(
+                "font-medium",
+                winner === "home" ? "text-destructive" : "text-foreground"
+              )}
+            >
+              {match.home.name}
+            </p>
+            <p className="text-muted-foreground text-xs">{homeDisplay}</p>
+          </div>
+          <span
+            className={cn(
+              "text-right font-semibold text-sm",
+              winner === "home" ? "text-destructive" : "text-muted-foreground"
+            )}
+          >
+            {homeScore ?? "—"}
+          </span>
+        </div>
+      </td>
+      <td className="px-2 py-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p
+              className={cn(
+                "font-medium",
+                winner === "away" ? "text-sky-600" : "text-foreground"
+              )}
+            >
+              {match.away.name}
+            </p>
+            <p className="text-muted-foreground text-xs">{awayDisplay}</p>
+          </div>
+          <span
+            className={cn(
+              "text-right font-semibold text-sm",
+              winner === "away" ? "text-sky-600" : "text-muted-foreground"
+            )}
+          >
+            {awayScore ?? "—"}
+          </span>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: UI component with necessary conditional rendering
 function StageLiveView() {
   const { tournamentId, stageId } = Route.useParams();
   const stageQuery = useStageDetails(tournamentId, stageId);
@@ -256,24 +384,18 @@ function StageLiveView() {
   }
 
   if (stageQuery.error || leaderboardQuery.error || matchesQuery.error) {
-    return (
-      <div className="container mx-auto max-w-5xl space-y-4 px-4 py-6">
-        <Card>
-          <CardHeader>
-            <CardTitle>Unable to load live view</CardTitle>
-            <CardDescription>
-              {stageQuery.error instanceof Error
-                ? stageQuery.error.message
-                : leaderboardQuery.error instanceof Error
-                  ? leaderboardQuery.error.message
-                  : matchesQuery.error instanceof Error
-                    ? matchesQuery.error.message
-                    : "Try refreshing the page."}
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      </div>
-    );
+    let errorMessage = "Try refreshing the page.";
+    if (stageQuery.error instanceof Error) {
+      errorMessage = stageQuery.error.message;
+    }
+    if (leaderboardQuery.error instanceof Error) {
+      errorMessage = leaderboardQuery.error.message;
+    }
+    if (matchesQuery.error instanceof Error) {
+      errorMessage = matchesQuery.error.message;
+    }
+
+    return <ErrorView errorMessage={errorMessage} />;
   }
 
   const stage = stageQuery.data;
@@ -291,8 +413,7 @@ function StageLiveView() {
             <Link
               className="inline-flex items-center gap-1 underline"
               params={{ tournamentId }}
-              search={{}}
-              to="/tournaments/$tournamentId/stages/"
+              to="/tournaments/$tournamentId/stages"
             >
               <ArrowLeft className="h-4 w-4" />
               Back to stages
@@ -422,8 +543,7 @@ function StageLiveView() {
             <Button asChild size="sm" variant="outline">
               <Link
                 params={{ stageId, tournamentId }}
-                search={{}}
-                to="/tournaments/$tournamentId/stages/$stageId"
+                to="/tournaments/$tournamentId/stages/$stageId/edit"
               >
                 <Activity className="mr-2 h-4 w-4" />
                 Manage stage
@@ -450,108 +570,9 @@ function StageLiveView() {
                     </tr>
                   </thead>
                   <tbody>
-                    {matches.map((match) => {
-                      const homeScore = match.score.home;
-                      const awayScore = match.score.away;
-                      const winner =
-                        homeScore != null && awayScore != null
-                          ? homeScore > awayScore
-                            ? "home"
-                            : homeScore < awayScore
-                              ? "away"
-                              : null
-                          : null;
-                      const statusLabel = getMatchStatusLabel(match.status);
-                      const scheduledDisplay = match.scheduledAt
-                        ? formatDateTime(new Date(match.scheduledAt))
-                        : "TBD";
-
-                      return (
-                        <tr className="border-b last:border-0" key={match.id}>
-                          <td className="px-2 py-3 text-muted-foreground text-xs">
-                            {match.round ?? "—"}
-                          </td>
-                          <td className="px-2 py-3 text-muted-foreground text-xs">
-                            {match.metadata?.fieldNumber
-                              ? `Field ${match.metadata.fieldNumber}`
-                              : "—"}
-                          </td>
-                          <td className="px-2 py-3 text-muted-foreground text-xs">
-                            {match.metadata?.label ??
-                              match.metadata?.matchIndex ??
-                              "—"}
-                          </td>
-                          <td className="px-2 py-3 text-muted-foreground text-xs">
-                            {statusLabel}
-                          </td>
-                          <td className="px-2 py-3 text-muted-foreground text-xs">
-                            {scheduledDisplay}
-                          </td>
-                          <td className="px-2 py-3">
-                            <div className="flex items-center justify-between gap-3">
-                              <div>
-                                <p
-                                  className={cn(
-                                    "font-medium",
-                                    winner === "home"
-                                      ? "text-destructive"
-                                      : "text-foreground"
-                                  )}
-                                >
-                                  {match.home.name}
-                                </p>
-                                <p className="text-muted-foreground text-xs">
-                                  {match.home.slug ??
-                                    match.home.placeholder ??
-                                    "—"}
-                                </p>
-                              </div>
-                              <span
-                                className={cn(
-                                  "text-right font-semibold text-sm",
-                                  winner === "home"
-                                    ? "text-destructive"
-                                    : "text-muted-foreground"
-                                )}
-                              >
-                                {homeScore ?? "—"}
-                              </span>
-                            </div>
-                          </td>
-                          <td className="px-2 py-3">
-                            <div className="flex items-center justify-between gap-3">
-                              <div>
-                                <p
-                                  className={cn(
-                                    "font-medium",
-                                    winner === "away"
-                                      ? "text-sky-600"
-                                      : "text-foreground"
-                                  )}
-                                >
-                                  {match.away.name}
-                                </p>
-                                <p className="text-muted-foreground text-xs">
-                                  {match.away.slug ??
-                                    match.away.placeholder ??
-                                    "—"}
-                                </p>
-                              </div>
-                              <span
-                                className={cn(
-                                  "text-right font-semibold text-sm",
-                                  winner === "away"
-                                    ? "text-sky-600"
-                                    : "text-muted-foreground"
-                                )}
-                              >
-                                {awayScore ?? "—"}
-                              </span>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
+                    {matches.map((match) => (
+                      <MatchRow key={match.id} match={match} />
+                    ))}
                   </tbody>
                 </table>
               </div>

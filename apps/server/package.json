@@ -7,20 +7,24 @@
     "check-types": "tsc -b",
     "compile": "bun build --compile --minify --sourcemap --bytecode ./src/index.ts --outfile server",
     "dev": "bun run --hot src/index.ts",
-    "start": "bun run dist/index.js"
+    "start": "bun run dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest --watch"
   },
   "dependencies": {
     "hono": "^4.8.2",
     "better-auth": "catalog:",
     "dotenv": "catalog:",
     "zod": "catalog:",
-    "drizzle-orm": "0.44.2",
+    "@libsql/linux-x64-musl": "0.4.7",
+    "drizzle-orm": "^0.44.7",
     "@rms-modern/auth": "workspace:*",
     "@rms-modern/db": "workspace:*"
   },
   "devDependencies": {
-    "typescript": "catalog:",
     "@types/bun": "^1.2.6",
-    "tsdown": "catalog:"
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "^4.0.9"
   }
 }

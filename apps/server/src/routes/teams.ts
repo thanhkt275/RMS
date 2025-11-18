@@ -392,7 +392,7 @@ teamsRoute.get("/:slug", async (c: Context) => {
       return c.json({ error: "Team not found" }, 404);
     }
 
-    const teamData = team[0]!;
+    const teamData = team[0];
     if (!teamData) {
       // Explicit check for teamData
       return c.json({ error: "Team data not found" }, 404);
@@ -570,7 +570,10 @@ teamsRoute.patch("/:slug", async (c: Context) => {
       return c.json({ error: "Team not found" }, 404);
     }
 
-    const teamId = teamResult[0]!.id;
+    const teamId = teamResult[0]?.id; // Added nullish coalescing
+    if (!teamId) {
+      return c.json({ error: "Team ID not found" }, 404);
+    }
 
     // Check if user is a mentor
     const membership = await db
@@ -659,9 +662,8 @@ teamsRoute.post("/:slug/invite/bulk", async (c: Context) => {
       return c.json({ error: "Team not found" }, 404);
     }
 
-    const team = teamResult[0]!;
+    const team = teamResult[0];
     if (!team) {
-      // Explicit check for team
       return c.json({ error: "Team data not found" }, 404);
     }
 
@@ -749,7 +751,7 @@ teamsRoute.post("/:slug/invite/bulk", async (c: Context) => {
             .from(organizationMembers)
             .where(
               and(
-                eq(organizationMembers.organizationId, team!.id),
+                eq(organizationMembers.organizationId, team.id),
                 eq(organizationMembers.userId, existingUser.id)
               )
             )
@@ -836,7 +838,7 @@ teamsRoute.post("/:slug/invite/bulk", async (c: Context) => {
           // Add to team
           await db.insert(organizationMembers).values({
             id: crypto.randomUUID(),
-            organizationId: team!.id,
+            organizationId: team.id,
             userId: newUser.id,
             role: "TEAM_MEMBER",
           });
@@ -914,7 +916,10 @@ teamsRoute.post("/:slug/invite", async (c: Context) => {
       return c.json({ error: "Team not found" }, 404);
     }
 
-    const team = teamResult[0]!;
+    const team = teamResult[0];
+    if (!team) {
+      return c.json({ error: "Team data not found" }, 404);
+    }
 
     // Check if user is a team mentor or leader
     const memberships = await db
@@ -922,7 +927,7 @@ teamsRoute.post("/:slug/invite", async (c: Context) => {
       .from(organizationMembers)
       .where(
         and(
-          eq(organizationMembers.organizationId, team!.id),
+          eq(organizationMembers.organizationId, team.id),
           eq(organizationMembers.userId, session.user.id)
         )
       )
@@ -1033,11 +1038,11 @@ teamsRoute.post("/:slug/invite", async (c: Context) => {
 
     // Add user to team
     await db.insert(organizationMembers).values({
-                id: crypto.randomUUID(),
-                organizationId: team!.id,
-                userId: newUser.id,
-                role: "TEAM_MEMBER",
-              });
+      id: crypto.randomUUID(),
+      organizationId: team.id,
+      userId: newUser.id,
+      role: "TEAM_MEMBER",
+    });
     // Send welcome email with credentials
     await sendTeamMemberWelcomeEmail({
       email: email.toLowerCase(),
@@ -1083,6 +1088,9 @@ teamsRoute.post("/:slug/avatar", async (c: Context) => {
     }
 
     const team = teamResult[0];
+    if (!team) {
+      return c.json({ error: "Team data not found" }, 404);
+    }
 
     // Check if user is a mentor of this team
     const memberResult = await db
@@ -1184,14 +1192,17 @@ teamsRoute.post("/:slug/cover", async (c: Context) => {
       return c.json({ error: "Team not found" }, 404);
     }
 
-    const teamData = teamResult[0]!;
+    const teamData = teamResult[0];
+    if (!teamData) {
+      return c.json({ error: "Team data not found" }, 404);
+    }
 
     const memberResult = await db
       .select()
       .from(organizationMembers)
       .where(
         and(
-          eq(organizationMembers.organizationId, team.id),
+          eq(organizationMembers.organizationId, teamData.id),
           eq(organizationMembers.userId, userId),
           eq(organizationMembers.role, "TEAM_MENTOR")
         )
@@ -1245,7 +1256,7 @@ teamsRoute.post("/:slug/cover", async (c: Context) => {
         updatedAt: sql`(unixepoch('now'))`,
         updatedBy: userId,
       })
-      .where(eq(organizations.id, team.id));
+      .where(eq(organizations.id, teamData.id));
 
     return c.json({
       id: fileId,
@@ -1289,13 +1300,18 @@ teamsRoute.patch("/:slug/members/:memberId/role", async (c: Context) => {
       return c.json({ error: "Team not found" }, 404);
     }
 
+    const teamId = team[0]?.id; // Added nullish coalescing
+    if (!teamId) {
+      return c.json({ error: "Team ID not found" }, 404);
+    }
+
     // Check if current user is a member of the team
     const currentUserMembership = await db
       .select({ role: organizationMembers.role })
       .from(organizationMembers)
       .where(
         and(
-          eq(organizationMembers.organizationId, team[0]!.id),
+          eq(organizationMembers.organizationId, teamId),
           eq(organizationMembers.userId, userId)
         )
       )
@@ -1305,7 +1321,10 @@ teamsRoute.patch("/:slug/members/:memberId/role", async (c: Context) => {
       return c.json({ error: "You are not a member of this team" }, 403);
     }
 
-    const currentUserRole = currentUserMembership[0]!.role;
+    const currentUserRole = currentUserMembership[0]?.role; // Added nullish coalescing
+    if (!currentUserRole) {
+      return c.json({ error: "User role not found" }, 403);
+    }
 
     // Check permissions
     if (
@@ -1331,7 +1350,7 @@ teamsRoute.patch("/:slug/members/:memberId/role", async (c: Context) => {
       .from(organizationMembers)
       .where(
         and(
-          eq(organizationMembers.organizationId, team[0]!.id),
+          eq(organizationMembers.organizationId, teamId),
           eq(organizationMembers.userId, memberId as string)
         )
       )
@@ -1349,7 +1368,7 @@ teamsRoute.patch("/:slug/members/:memberId/role", async (c: Context) => {
       })
       .where(
         and(
-          eq(organizationMembers.organizationId, team[0]!.id),
+          eq(organizationMembers.organizationId, teamId),
           eq(organizationMembers.userId, memberId as string)
         )
       );
@@ -1388,12 +1407,17 @@ teamsRoute.delete("/:slug/members/:memberId", async (c: Context) => {
       return c.json({ error: "Team not found" }, 404);
     }
 
+    const teamId = team[0]?.id; // Added nullish coalescing
+    if (!teamId) {
+      return c.json({ error: "Team ID not found" }, 404);
+    }
+
     const currentUserMembership = await db
       .select({ role: organizationMembers.role })
       .from(organizationMembers)
       .where(
         and(
-          eq(organizationMembers.organizationId, team[0]!.id),
+          eq(organizationMembers.organizationId, teamId),
           eq(organizationMembers.userId, userId)
         )
       )
@@ -1403,7 +1427,10 @@ teamsRoute.delete("/:slug/members/:memberId", async (c: Context) => {
       return c.json({ error: "You are not a member of this team" }, 403);
     }
 
-    const currentUserRole = currentUserMembership[0]!.role;
+    const currentUserRole = currentUserMembership[0]?.role; // Added nullish coalescing
+    if (!currentUserRole) {
+      return c.json({ error: "User role not found" }, 403);
+    }
 
     // Only mentors can remove members
     if (currentUserRole !== "TEAM_MENTOR") {
@@ -1421,7 +1448,7 @@ teamsRoute.delete("/:slug/members/:memberId", async (c: Context) => {
       .from(organizationMembers)
       .where(
         and(
-          eq(organizationMembers.organizationId, team[0]!.id),
+          eq(organizationMembers.organizationId, teamId),
           eq(organizationMembers.userId, memberId as string)
         )
       )
@@ -1436,7 +1463,7 @@ teamsRoute.delete("/:slug/members/:memberId", async (c: Context) => {
       .delete(organizationMembers)
       .where(
         and(
-          eq(organizationMembers.organizationId, team[0]!.id),
+          eq(organizationMembers.organizationId, teamId),
           eq(organizationMembers.userId, memberId as string)
         )
       );

@@ -74,8 +74,20 @@ export const Route = createFileRoute("/tournaments/$tournamentId/edit")({
   component: EditTournamentPage,
   beforeLoad: async () => {
     const session = await authClient.getSession();
-    if (!session.data || session.data.user.role !== "ADMIN") {
-      throw redirect({ to: "/tournaments" });
+    if (
+      !session.data ||
+      (session.data.user as { role?: string }).role !== "ADMIN"
+    ) {
+      throw redirect({
+        to: "/tournaments",
+        search: {
+          page: 1,
+          search: "",
+          status: "ALL",
+          sortField: "createdAt",
+          sortDirection: "desc",
+        },
+      });
     }
     return { session };
   },
@@ -113,8 +125,8 @@ function hydrateFormValues(tournament: TournamentDetail): TournamentFormValues {
 function EditTournamentPage() {
   const { tournamentId } = Route.useParams();
   const { session } = Route.useRouteContext();
-  const navigate = useNavigate();
-  const isAdmin = session.data?.user.role === "ADMIN";
+  const navigate = useNavigate({ from: Route.fullPath });
+  const isAdmin = (session.data?.user as { role?: string })?.role === "ADMIN";
 
   const detailQuery = useQuery<TournamentDetail>({
     queryKey: ["tournament", tournamentId, "edit"],
@@ -237,15 +249,19 @@ function TournamentEditForm({
 
   const form = useForm({
     defaultValues: initialValues,
-    validators: {
-      onSubmit: tournamentFormSchema,
-    },
     onSubmit: async ({ value }) => {
+      const result = tournamentFormSchema.safeParse(value);
+      if (!result.success) {
+        toast.error(
+          `Validation failed: ${result.error.issues[0]?.message ?? "Unknown error"}`
+        );
+        return;
+      }
       if (!isAdmin) {
         toast.error("Only admins can update tournaments.");
         return;
       }
-      await updateTournament.mutateAsync(mapFormValuesToPayload(value));
+      await updateTournament.mutateAsync(mapFormValuesToPayload(result.data));
     },
   });
 
@@ -585,13 +601,18 @@ function TournamentEditForm({
                             <Input
                               onChange={(event) => {
                                 const next = [...field.state.value];
-                                next[index] = {
-                                  ...next[index],
-                                  title: event.target.value,
-                                };
-                                field.handleChange(next);
+                                const current = next[index];
+                                if (current) {
+                                  next[index] = {
+                                    ...current,
+                                    title: event.target.value,
+                                    url: current.url || "",
+                                    type: current.type || "DOCUMENT",
+                                  };
+                                  field.handleChange(next);
+                                }
                               }}
-                              value={resource.title}
+                              value={resource.title ?? ""}
                             />
                           </div>
                           <div>
@@ -599,14 +620,19 @@ function TournamentEditForm({
                             <Select
                               onChange={(event) => {
                                 const next = [...field.state.value];
-                                next[index] = {
-                                  ...next[index],
-                                  type: event.target
-                                    .value as TournamentResourceType,
-                                };
-                                field.handleChange(next);
+                                const current = next[index];
+                                if (current) {
+                                  next[index] = {
+                                    ...current,
+                                    type: event.target
+                                      .value as TournamentResourceType,
+                                    title: current.title || "",
+                                    url: current.url || "",
+                                  };
+                                  field.handleChange(next);
+                                }
                               }}
-                              value={resource.type}
+                              value={resource.type ?? "DOCUMENT"}
                             >
                               {TOURNAMENT_RESOURCE_TYPES.map((type) => (
                                 <option key={type} value={type}>
@@ -621,15 +647,20 @@ function TournamentEditForm({
                           <Input
                             onChange={(event) => {
                               const next = [...field.state.value];
-                              next[index] = {
-                                ...next[index],
-                                url: event.target.value,
-                              };
-                              field.handleChange(next);
+                              const current = next[index];
+                              if (current) {
+                                next[index] = {
+                                  ...current,
+                                  url: event.target.value,
+                                  title: current.title || "",
+                                  type: current.type || "DOCUMENT",
+                                };
+                                field.handleChange(next);
+                              }
                             }}
                             placeholder="https://"
                             type="url"
-                            value={resource.url}
+                            value={resource.url ?? ""}
                           />
                         </div>
                         <div>
@@ -637,14 +668,20 @@ function TournamentEditForm({
                           <Textarea
                             onChange={(event) => {
                               const next = [...field.state.value];
-                              next[index] = {
-                                ...next[index],
-                                description: event.target.value,
-                              };
-                              field.handleChange(next);
+                              const current = next[index];
+                              if (current) {
+                                next[index] = {
+                                  ...current,
+                                  description: event.target.value,
+                                  title: current.title || "",
+                                  url: current.url || "",
+                                  type: current.type || "DOCUMENT",
+                                };
+                                field.handleChange(next);
+                              }
                             }}
                             rows={2}
-                            value={resource.description}
+                            value={resource.description ?? ""}
                           />
                         </div>
                         <div className="flex justify-end">

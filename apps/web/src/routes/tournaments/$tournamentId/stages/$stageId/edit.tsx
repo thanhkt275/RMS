@@ -65,10 +65,12 @@ export const Route = createFileRoute(
   component: EditStagePage,
   beforeLoad: async ({ params }) => {
     const session = await authClient.getSession();
-    if (!session.data || session.data.user.role !== "ADMIN") {
+    if (
+      !session.data ||
+      (session.data.user as { role?: string }).role !== "ADMIN"
+    ) {
       throw redirect({
         params,
-        search: {},
         to: "/tournaments/$tournamentId/stages",
       });
     }
@@ -113,7 +115,7 @@ function useParticipants(tournamentId: string) {
 
 function EditStagePage() {
   const { stageId, tournamentId } = Route.useParams();
-  const navigate = useNavigate();
+  const navigate = useNavigate({ from: Route.fullPath });
   const queryClient = useQueryClient();
   const stageQuery = useStageDetail(tournamentId, stageId);
   const participantsQuery = useParticipants(tournamentId);
@@ -202,11 +204,15 @@ function EditStagePage() {
       teamOrder: [] as string[],
       regenerateMatches: false,
     },
-    validators: {
-      onSubmit: stageUpdateFormSchema,
-    },
     onSubmit: async ({ value }) => {
-      await updateStage.mutateAsync(value);
+      const result = stageUpdateFormSchema.safeParse(value);
+      if (!result.success) {
+        toast.error(
+          `Validation failed: ${result.error.issues[0]?.message ?? "Unknown error"}`
+        );
+        return;
+      }
+      await updateStage.mutateAsync(result.data);
     },
   });
 
@@ -272,7 +278,6 @@ function EditStagePage() {
         <Button asChild variant="ghost">
           <Link
             params={{ tournamentId }}
-            search={{}}
             to="/tournaments/$tournamentId/stages"
           >
             Back to stages
@@ -328,7 +333,9 @@ function EditStagePage() {
                       min={1}
                       onBlur={field.handleBlur}
                       onChange={(event) =>
-                        field.handleChange(event.target.value)
+                        field.handleChange(
+                          Number.parseInt(event.target.value, 10) || 1
+                        )
                       }
                       type="number"
                       value={field.state.value}

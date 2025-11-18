@@ -225,6 +225,8 @@ export const tournaments = sqliteTable("tournament", {
   season: text("season"),
   location: text("location"),
   organizer: text("organizer"),
+  logo: text("logo"),
+  coverImage: text("cover_image"),
   description: text("description"),
   announcement: text("announcement"),
   fieldCount: integer("field_count").notNull().default(1),
@@ -235,6 +237,12 @@ export const tournaments = sqliteTable("tournament", {
   endDate: integer("end_date", { mode: "timestamp" }),
   metadata: text("metadata"),
   scoreProfileId: text("score_profile_id").references(() => scoreProfiles.id, {
+    onDelete: "set null",
+  }),
+  createdBy: text("created_by").references(() => user.id, {
+    onDelete: "set null",
+  }),
+  updatedBy: text("updated_by").references(() => user.id, {
     onDelete: "set null",
   }),
   createdAt: integer("created_at", { mode: "timestamp" })
@@ -309,6 +317,9 @@ export const tournamentParticipations = sqliteTable(
     organizationId: text("organization_id")
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
+    registeredBy: text("registered_by").references(() => user.id, {
+      onDelete: "set null",
+    }),
     seed: integer("seed"),
     placement: text("placement"),
     result: text("result"),
@@ -341,6 +352,9 @@ export const tournamentStages = sqliteTable("tournament_stage", {
     .notNull()
     .default("PENDING"),
   configuration: text("configuration"),
+  scoreProfileId: text("score_profile_id").references(() => scoreProfiles.id, {
+    onDelete: "set null",
+  }),
   startedAt: integer("started_at", { mode: "timestamp" }),
   completedAt: integer("completed_at", { mode: "timestamp" }),
   createdAt: integer("created_at", { mode: "timestamp" })
@@ -459,3 +473,111 @@ export const tournamentAchievements = sqliteTable("tournament_achievement", {
     .notNull()
     .default(sql`(unixepoch('now'))`),
 });
+
+// Relations
+import { relations } from "drizzle-orm";
+
+export const tournamentStagesRelations = relations(
+  tournamentStages,
+  ({ one, many }) => ({
+    tournament: one(tournaments, {
+      fields: [tournamentStages.tournamentId],
+      references: [tournaments.id],
+    }),
+    teams: many(tournamentStageTeams),
+    matches: many(tournamentMatches),
+    rankings: many(tournamentStageRankings),
+  })
+);
+
+export const tournamentStageTeamsRelations = relations(
+  tournamentStageTeams,
+  ({ one }) => ({
+    stage: one(tournamentStages, {
+      fields: [tournamentStageTeams.stageId],
+      references: [tournamentStages.id],
+    }),
+    organization: one(organizations, {
+      fields: [tournamentStageTeams.organizationId],
+      references: [organizations.id],
+    }),
+  })
+);
+
+export const tournamentMatchesRelations = relations(
+  tournamentMatches,
+  ({ one }) => ({
+    tournament: one(tournaments, {
+      fields: [tournamentMatches.tournamentId],
+      references: [tournaments.id],
+    }),
+    stage: one(tournamentStages, {
+      fields: [tournamentMatches.stageId],
+      references: [tournamentStages.id],
+    }),
+    homeTeam: one(organizations, {
+      fields: [tournamentMatches.homeTeamId],
+      references: [organizations.id],
+      relationName: "homeTeam",
+    }),
+    awayTeam: one(organizations, {
+      fields: [tournamentMatches.awayTeamId],
+      references: [organizations.id],
+      relationName: "awayTeam",
+    }),
+  })
+);
+
+export const tournamentsRelations = relations(tournaments, ({ many }) => ({
+  stages: many(tournamentStages),
+  participations: many(tournamentParticipations),
+  resources: many(tournamentResources),
+  fieldAssignments: many(tournamentFieldAssignments),
+  matches: many(tournamentMatches),
+}));
+
+export const organizationsRelations = relations(organizations, ({ many }) => ({
+  members: many(organizationMembers),
+  invitations: many(organizationInvitations),
+  tournamentParticipations: many(tournamentParticipations),
+  stageTeams: many(tournamentStageTeams),
+  achievements: many(tournamentAchievements),
+}));
+
+export const tournamentParticipationsRelations = relations(
+  tournamentParticipations,
+  ({ one }) => ({
+    tournament: one(tournaments, {
+      fields: [tournamentParticipations.tournamentId],
+      references: [tournaments.id],
+    }),
+    organization: one(organizations, {
+      fields: [tournamentParticipations.organizationId],
+      references: [organizations.id],
+    }),
+  })
+);
+
+export const tournamentResourcesRelations = relations(
+  tournamentResources,
+  ({ one }) => ({
+    tournament: one(tournaments, {
+      fields: [tournamentResources.tournamentId],
+      references: [tournaments.id],
+    }),
+  })
+);
+
+export const tournamentStageRankingsRelations = relations(
+  tournamentStageRankings,
+  ({ one }) => ({
+    stage: one(tournamentStages, {
+      fields: [tournamentStageRankings.stageId],
+      references: [tournamentStages.id],
+    }),
+    organization: one(organizations, {
+      fields: [tournamentStageRankings.organizationId],
+      references: [organizations.id],
+    }),
+  })
+);

@@ -51,10 +51,12 @@ export const Route = createFileRoute("/tournaments/$tournamentId/stages/new")({
   component: CreateStagePage,
   beforeLoad: async ({ params }) => {
     const session = await authClient.getSession();
-    if (!session.data || session.data.user.role !== "ADMIN") {
+    if (
+      !session.data ||
+      (session.data.user as { role?: string }).role !== "ADMIN"
+    ) {
       throw redirect({
         params,
-        search: {},
         to: "/tournaments/$tournamentId/stages",
       });
     }
@@ -99,7 +101,7 @@ function useStageCount(tournamentId: string) {
 
 function CreateStagePage() {
   const { tournamentId } = Route.useParams();
-  const navigate = useNavigate();
+  const navigate = useNavigate({ from: Route.fullPath });
   const queryClient = useQueryClient();
   const tournamentQuery = useTournament(tournamentId);
   const stageCountQuery = useStageCount(tournamentId);
@@ -135,7 +137,6 @@ function CreateStagePage() {
       });
       await navigate({
         params: { tournamentId },
-        search: {},
         to: "/tournaments/$tournamentId/stages",
       });
     },
@@ -155,11 +156,15 @@ function CreateStagePage() {
       teamOrder: [] as string[],
       generateMatches: true,
     },
-    validators: {
-      onSubmit: stageCreateFormSchema,
-    },
     onSubmit: async ({ value }) => {
-      await createStage.mutateAsync(value);
+      const result = stageCreateFormSchema.safeParse(value);
+      if (!result.success) {
+        toast.error(
+          `Validation failed: ${result.error.issues[0]?.message ?? "Unknown error"}`
+        );
+        return;
+      }
+      await createStage.mutateAsync(result.data);
     },
   });
 
@@ -212,7 +217,6 @@ function CreateStagePage() {
         <Button asChild variant="ghost">
           <Link
             params={{ tournamentId }}
-            search={{}}
             to="/tournaments/$tournamentId/stages"
           >
             Cancel
@@ -279,7 +283,9 @@ function CreateStagePage() {
                       min={1}
                       onBlur={field.handleBlur}
                       onChange={(event) =>
-                        field.handleChange(event.target.value)
+                        field.handleChange(
+                          Number.parseInt(event.target.value, 10) || 1
+                        )
                       }
                       type="number"
                       value={field.state.value}

@@ -24,8 +24,18 @@ import { ScoreProfileForm } from "./score-profile-form";
 export const Route = createFileRoute("/score-profiles/$scoreProfileId")({
   beforeLoad: async () => {
     const session = await authClient.getSession();
-    if (!session.data || session.data.user.role !== "ADMIN") {
-      throw redirect({ to: "/tournaments" });
+    const user = session.data?.user as { role?: string } | undefined;
+    if (!session.data || user?.role !== "ADMIN") {
+      throw redirect({
+        to: "/tournaments",
+        search: {
+          page: 1,
+          search: "",
+          status: "ALL",
+          sortField: "createdAt",
+          sortDirection: "desc",
+        },
+      });
     }
     return { session };
   },
@@ -35,7 +45,8 @@ export const Route = createFileRoute("/score-profiles/$scoreProfileId")({
 function EditScoreProfilePage() {
   const { scoreProfileId } = Route.useParams();
   const { session } = Route.useRouteContext();
-  const isAdmin = session.data?.user.role === "ADMIN";
+  const user = session.data?.user as { role?: string } | undefined;
+  const isAdmin = user?.role === "ADMIN";
   const queryClient = useQueryClient();
 
   const detailQuery = useQuery<ScoreProfileModel>({
@@ -119,9 +130,7 @@ function EditScoreProfilePage() {
           </CardHeader>
           <CardContent>
             <Button asChild variant="secondary">
-              <Link search={{}} to="/score-profiles">
-                Back to profiles
-              </Link>
+              <Link to="/score-profiles">Back to profiles</Link>
             </Button>
           </CardContent>
         </Card>
@@ -146,9 +155,7 @@ function EditScoreProfilePage() {
         </div>
         <div className="flex gap-2">
           <Button asChild variant="secondary">
-            <Link search={{}} to="/score-profiles">
-              Back to list
-            </Link>
+            <Link to="/score-profiles">Back to list</Link>
           </Button>
         </div>
       </div>
@@ -173,7 +180,6 @@ function EditScoreProfilePage() {
       </Card>
 
       <ScoreProfileForm
-        formKey={`${profile.id}-${profile.updatedAt ?? ""}`}
         initialValues={toFormValuesFromModel(profile)}
         isSubmitting={updateProfile.isPending}
         onSubmit={handleSubmit}

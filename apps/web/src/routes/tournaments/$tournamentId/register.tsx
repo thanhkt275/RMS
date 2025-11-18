@@ -61,7 +61,7 @@ export const Route = createFileRoute("/tournaments/$tournamentId/register")({
 
 function RegisterTeamPage() {
   const { tournamentId } = Route.useParams();
-  const navigate = useNavigate();
+  const navigate = useNavigate({ from: Route.fullPath });
 
   const summaryQuery = useQuery<TournamentSummary>({
     queryKey: ["tournament", tournamentId, "summary"],
@@ -136,13 +136,17 @@ function RegisterTeamPage() {
       organizationId: "",
       notes: "",
     },
-    validators: {
-      onSubmit: registerSchema,
-    },
     onSubmit: async ({ value }) => {
+      const result = registerSchema.safeParse(value);
+      if (!result.success) {
+        toast.error(
+          `Validation failed: ${result.error.issues[0]?.message ?? "Unknown error"}`
+        );
+        return;
+      }
       await registerTeam.mutateAsync({
-        organizationId: value.organizationId,
-        notes: value.notes?.trim() || undefined,
+        organizationId: result.data.organizationId,
+        notes: result.data.notes?.trim() || undefined,
       });
     },
   });
@@ -183,11 +187,7 @@ function RegisterTeamPage() {
           </p>
         </div>
         <Button asChild variant="ghost">
-          <Link
-            params={{ tournamentId }}
-            search={{}}
-            to="/tournaments/$tournamentId"
-          >
+          <Link params={{ tournamentId }} to="/tournaments/$tournamentId">
             Back
           </Link>
         </Button>
@@ -229,7 +229,15 @@ function RegisterTeamPage() {
           </CardHeader>
           <CardContent>
             <Button asChild>
-              <Link search={{}} to="/teams">
+              <Link
+                search={{
+                  page: 1,
+                  search: "",
+                  sortField: "name",
+                  sortDirection: "asc",
+                }}
+                to="/teams"
+              >
                 Browse teams
               </Link>
             </Button>
@@ -308,7 +316,16 @@ function RegisterTeamPage() {
             <div className="flex items-center justify-between">
               <p className="text-muted-foreground text-sm">
                 Need to update your team?{" "}
-                <Link className="underline" search={{}} to="/teams">
+                <Link
+                  className="underline"
+                  search={{
+                    page: 1,
+                    search: "",
+                    sortField: "name",
+                    sortDirection: "asc",
+                  }}
+                  to="/teams"
+                >
                   Go to Teams
                 </Link>
               </p>

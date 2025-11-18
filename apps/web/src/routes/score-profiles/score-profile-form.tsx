@@ -40,7 +40,6 @@ type ScoreProfileFormProps = {
   onSubmit: (values: ScoreProfileFormValues) => Promise<void>;
   submitLabel: string;
   isSubmitting?: boolean;
-  formKey?: string;
 };
 
 const FORMULA_IDENTIFIER_REGEX = /[A-Za-z0-9_-]+/g;
@@ -129,13 +128,17 @@ export function ScoreProfileForm({
   onSubmit,
   submitLabel,
   isSubmitting,
-  formKey,
 }: ScoreProfileFormProps) {
   const form = useForm({
-    key: formKey,
     defaultValues: initialValues,
     validators: {
-      onSubmit: scoreProfileFormSchema,
+      onSubmit: async ({ value }) => {
+        try {
+          await scoreProfileFormSchema.parseAsync(value);
+        } catch (error) {
+          return error;
+        }
+      },
     },
     onSubmit: async ({ value }) => {
       await onSubmit(value);
@@ -596,20 +599,27 @@ export function ScoreProfileForm({
                           const requiredTeamCount = Number(
                             event.target.value
                           ) as 2 | 4;
-                          if (part.type === "NUMBER") {
+                          const bonus = part.cooperativeBonus;
+                          if (part.type === "NUMBER" && bonus) {
+                            const numberPart = part as NumberScoreProfilePart;
                             setNumberPart(index, {
-                              ...part,
+                              ...numberPart,
                               cooperativeBonus: {
-                                ...part.cooperativeBonus!,
                                 requiredTeamCount,
+                                bonusPoints: bonus.bonusPoints,
+                                appliesTo: bonus.appliesTo,
+                                description: bonus.description,
                               },
                             });
-                          } else {
+                          } else if (bonus) {
+                            const booleanPart = part as BooleanScoreProfilePart;
                             setBooleanPart(index, {
-                              ...part,
+                              ...booleanPart,
                               cooperativeBonus: {
-                                ...part.cooperativeBonus!,
                                 requiredTeamCount,
+                                bonusPoints: bonus.bonusPoints,
+                                appliesTo: bonus.appliesTo,
+                                description: bonus.description,
                               },
                             });
                           }
@@ -629,20 +639,27 @@ export function ScoreProfileForm({
                         min={0}
                         onChange={(event) => {
                           const bonusPoints = Number(event.target.value) || 0;
-                          if (part.type === "NUMBER") {
+                          const bonus = part.cooperativeBonus;
+                          if (part.type === "NUMBER" && bonus) {
+                            const numberPart = part as NumberScoreProfilePart;
                             setNumberPart(index, {
-                              ...part,
+                              ...numberPart,
                               cooperativeBonus: {
-                                ...part.cooperativeBonus!,
+                                requiredTeamCount: bonus.requiredTeamCount,
                                 bonusPoints,
+                                appliesTo: bonus.appliesTo,
+                                description: bonus.description,
                               },
                             });
-                          } else {
+                          } else if (bonus) {
+                            const booleanPart = part as BooleanScoreProfilePart;
                             setBooleanPart(index, {
-                              ...part,
+                              ...booleanPart,
                               cooperativeBonus: {
-                                ...part.cooperativeBonus!,
+                                requiredTeamCount: bonus.requiredTeamCount,
                                 bonusPoints,
+                                appliesTo: bonus.appliesTo,
+                                description: bonus.description,
                               },
                             });
                           }
@@ -660,20 +677,27 @@ export function ScoreProfileForm({
                         onChange={(event) => {
                           const appliesTo = event.target
                             .value as (typeof SCORE_PROFILE_COOP_APPLIES_TO)[number];
-                          if (part.type === "NUMBER") {
+                          const bonus = part.cooperativeBonus;
+                          if (part.type === "NUMBER" && bonus) {
+                            const numberPart = part as NumberScoreProfilePart;
                             setNumberPart(index, {
-                              ...part,
+                              ...numberPart,
                               cooperativeBonus: {
-                                ...part.cooperativeBonus!,
+                                requiredTeamCount: bonus.requiredTeamCount,
+                                bonusPoints: bonus.bonusPoints,
                                 appliesTo,
+                                description: bonus.description,
                               },
                             });
-                          } else {
+                          } else if (bonus) {
+                            const booleanPart = part as BooleanScoreProfilePart;
                             setBooleanPart(index, {
-                              ...part,
+                              ...booleanPart,
                               cooperativeBonus: {
-                                ...part.cooperativeBonus!,
+                                requiredTeamCount: bonus.requiredTeamCount,
+                                bonusPoints: bonus.bonusPoints,
                                 appliesTo,
+                                description: bonus.description,
                               },
                             });
                           }
@@ -695,21 +719,30 @@ export function ScoreProfileForm({
                       <Input
                         disabled={disableFields}
                         onChange={(event) => {
-                          if (part.type === "NUMBER") {
+                          const bonus = part.cooperativeBonus;
+                          if (part.type === "NUMBER" && bonus) {
+                            const numberPart = part as NumberScoreProfilePart;
+                            const updatedBonus = {
+                              requiredTeamCount: bonus.requiredTeamCount,
+                              bonusPoints: bonus.bonusPoints,
+                              appliesTo: bonus.appliesTo,
+                              description: event.target.value,
+                            } as const;
                             setNumberPart(index, {
-                              ...part,
-                              cooperativeBonus: {
-                                ...part.cooperativeBonus!,
-                                description: event.target.value,
-                              },
+                              ...numberPart,
+                              cooperativeBonus: updatedBonus,
                             });
-                          } else {
+                          } else if (bonus) {
+                            const booleanPart = part as BooleanScoreProfilePart;
+                            const updatedBonus = {
+                              requiredTeamCount: bonus.requiredTeamCount,
+                              bonusPoints: bonus.bonusPoints,
+                              appliesTo: bonus.appliesTo,
+                              description: event.target.value,
+                            } as const;
                             setBooleanPart(index, {
-                              ...part,
-                              cooperativeBonus: {
-                                ...part.cooperativeBonus!,
-                                description: event.target.value,
-                              },
+                              ...booleanPart,
+                              cooperativeBonus: updatedBonus,
                             });
                           }
                         }}
