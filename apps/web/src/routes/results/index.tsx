@@ -104,7 +104,7 @@ function useTournamentList() {
     queryFn: async () => {
       const params = new URLSearchParams({
         page: "1",
-        sortField: "startDate",
+        sortBy: "startDate",
         sortDirection: "asc",
       });
       const response = await fetch(
@@ -574,7 +574,17 @@ function ResultsPage() {
       <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
           <p className="text-muted-foreground text-sm">
-            <Link className="underline" search={{}} to="/tournaments">
+            <Link
+              className="underline"
+              search={{
+                page: 1,
+                search: "",
+                status: "ALL",
+                sortField: "createdAt",
+                sortDirection: "desc",
+              }}
+              to="/tournaments"
+            >
               Tournaments
             </Link>{" "}
             / Live scoreboard

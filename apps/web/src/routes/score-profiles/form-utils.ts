@@ -83,10 +83,10 @@ const penaltySchema = z.object({
 export const scoreProfileFormSchema = z
   .object({
     name: z.string().min(3).max(180),
-    description: z.string().max(2000).optional().default(""),
+    description: z.string().max(2000).default(""),
     version: z.number().int().min(1).default(1),
     totalFormula: z.string().min(1).max(2000),
-    notes: z.string().max(1000).optional().default(""),
+    notes: z.string().max(1000).default(""),
     parts: z.array(partSchema).min(1),
     penalties: z.array(penaltySchema).default([]),
   })

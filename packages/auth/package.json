@@ -23,8 +23,8 @@
   "dependencies": {
     "better-auth": "catalog:",
     "dotenv": "catalog:",
+    "drizzle-orm": "^0.44.7",
     "zod": "catalog:",
-    "@rms-modern/db": "workspace:*",
-    "drizzle-orm": "0.44.2"
+    "@rms-modern/db": "workspace:*"
   }
 }

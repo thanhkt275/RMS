@@ -63,23 +63,16 @@ export const Route = createFileRoute("/tournaments/$tournamentId/field-roles")({
   component: FieldRolesPage,
 });
 
-function FieldRolesPage() {
-  const { tournamentId } = Route.useParams();
-  const { data: session } = authClient.useSession();
+function useFieldRolesApi(tournamentId: string, isAdmin: boolean) {
   const queryClient = useQueryClient();
-
-  const [modalField, setModalField] = useState<number | null>(null);
-  const [assignFormData, setAssignFormData] = useState<{
-    [key: number]: { role: string; userId: string };
-  }>({});
-
-  const isAdmin = (session?.user as { role?: string })?.role === "ADMIN";
 
   const rolesQuery = useQuery<FieldRolesData>({
     queryKey: ["tournament-field-roles", tournamentId],
     queryFn: async () => {
       const response = await fetch(
-        `${import.meta.env.VITE_SERVER_URL}/api/tournaments/${tournamentId}/field-roles`,
+        `${
+          import.meta.env.VITE_SERVER_URL
+        }/api/tournaments/${tournamentId}/field-roles`,
         { credentials: "include" }
       );
       if (!response.ok) {
@@ -94,7 +87,9 @@ function FieldRolesPage() {
     queryKey: ["tournament-field-role-users", tournamentId],
     queryFn: async () => {
       const response = await fetch(
-        `${import.meta.env.VITE_SERVER_URL}/api/tournaments/${tournamentId}/field-roles/users`,
+        `${
+          import.meta.env.VITE_SERVER_URL
+        }/api/tournaments/${tournamentId}/field-roles/users`,
         {
           credentials: "include",
         }
@@ -114,7 +109,9 @@ function FieldRolesPage() {
       role: string;
     }) => {
       const response = await fetch(
-        `${import.meta.env.VITE_SERVER_URL}/api/tournaments/${tournamentId}/field-roles`,
+        `${
+          import.meta.env.VITE_SERVER_URL
+        }/api/tournaments/${tournamentId}/field-roles`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -138,7 +135,9 @@ function FieldRolesPage() {
   const deleteMutation = useMutation({
     mutationFn: async (assignmentId: string) => {
       const response = await fetch(
-        `${import.meta.env.VITE_SERVER_URL}/api/tournaments/${tournamentId}/field-roles/${assignmentId}`,
+        `${
+          import.meta.env.VITE_SERVER_URL
+        }/api/tournaments/${tournamentId}/field-roles/${assignmentId}`,
         {
           method: "DELETE",
           credentials: "include",
@@ -156,60 +155,26 @@ function FieldRolesPage() {
     },
   });
 
-  if (!isAdmin) {
-    return (
-      <div className="container mx-auto max-w-5xl space-y-4 px-4 py-6">
-        <Card>
-          <CardHeader>
-            <CardTitle>Access Denied</CardTitle>
-            <CardDescription>
-              You need admin privileges to manage field roles.
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      </div>
-    );
-  }
+  return { rolesQuery, usersQuery, assignMutation, deleteMutation };
+}
 
-  if (rolesQuery.isPending || usersQuery.isPending) {
-    return <Loader />;
-  }
-
-  if (rolesQuery.error || !rolesQuery.data) {
-    return (
-      <div className="container mx-auto max-w-5xl space-y-4 px-4 py-6">
-        <Card>
-          <CardHeader>
-            <CardTitle>Unable to load field roles</CardTitle>
-            <CardDescription>
-              {rolesQuery.error instanceof Error
-                ? rolesQuery.error.message
-                : "Please try again later."}
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      </div>
-    );
-  }
-
-  const { fields, assignments } = rolesQuery.data;
-  const users = usersQuery.data?.users || [];
+function useFieldRoleAssignForm(
+  users: User[],
+  assignMutation: ReturnType<
+    typeof useMutation<
+      unknown,
+      Error,
+      { userId: string; fieldNumber: number; role: string }
+    >
+  >
+) {
+  const [modalField, setModalField] = useState<number | null>(null);
+  const [assignFormData, setAssignFormData] = useState<{
+    [key: number]: { role: string; userId: string };
+  }>({});
 
   const findUserIdForRole = (role: FieldRoleValue | string) =>
     users.find((user) => user.role === role)?.id ?? "";
-
-  const assignmentsByField = assignments.reduce<
-    Record<number, FieldRoleAssignment[]>
-  >((acc, assignment) => {
-    if (!acc[assignment.fieldNumber]) {
-      acc[assignment.fieldNumber] = [];
-    }
-    acc[assignment.fieldNumber].push(assignment);
-    return acc;
-  }, {});
-
-  const getFieldAssignments = (fieldNumber: number) =>
-    assignmentsByField[fieldNumber] ?? [];
 
   const handleAssign = (fieldNumber: number) => {
     const formData = assignFormData[fieldNumber];
@@ -285,6 +250,79 @@ function FieldRolesPage() {
     modalField !== null
       ? (assignFormData[modalField] ?? { role: "", userId: "" })
       : undefined;
+
+  return {
+    modalField,
+    assignFormData,
+    modalFormData,
+    handleAssign,
+    openAssignModal,
+    closeModal,
+    updateFormData,
+    handleRoleChange,
+  };
+}
+
+type FieldRolesContentProps = {
+  fields: Array<{
+    fieldNumber: number;
+    roles: Record<FieldRoleValue, FieldRoleUser | null>;
+  }>;
+  assignments: FieldRoleAssignment[];
+  users: User[];
+  modalField: number | null;
+  modalFormData: { role: string; userId: string } | undefined;
+  assignMutation: ReturnType<
+    typeof useMutation<
+      unknown,
+      Error,
+      { userId: string; fieldNumber: number; role: string }
+    >
+  >;
+  deleteMutation: ReturnType<typeof useMutation<unknown, Error, string>>;
+  onOpenModal: (fieldNumber: number) => void;
+  onCloseModal: () => void;
+  onAssign: (fieldNumber: number) => void;
+  onUpdateFormData: (
+    fieldNumber: number,
+    field: "role" | "userId",
+    value: string
+  ) => void;
+  onRoleChange: (fieldNumber: number, value: FieldRoleValue) => void;
+  tournamentId: string;
+};
+
+function FieldRolesContent({
+  fields,
+  assignments,
+  users,
+  modalField,
+  modalFormData,
+  assignMutation,
+  deleteMutation,
+  onOpenModal,
+  onCloseModal,
+  onAssign,
+  onUpdateFormData,
+  onRoleChange,
+  tournamentId,
+}: FieldRolesContentProps) {
+  const assignmentsByField = assignments.reduce<
+    Record<number, FieldRoleAssignment[]>
+  >((acc, assignment) => {
+    const fieldNumber = assignment.fieldNumber;
+    if (!acc[fieldNumber]) {
+      acc[fieldNumber] = [];
+    }
+    const fieldAssignments = acc[fieldNumber];
+    if (fieldAssignments) {
+      fieldAssignments.push(assignment);
+    }
+    return acc;
+  }, {});
+
+  const getFieldAssignments = (fieldNumber: number) =>
+    assignmentsByField[fieldNumber] ?? [];
 
   return (
     <div className="container mx-auto max-w-6xl space-y-6 px-4 py-6">
@@ -381,7 +419,7 @@ function FieldRolesPage() {
 
                 <Button
                   className="w-full"
-                  onClick={() => openAssignModal(field.fieldNumber)}
+                  onClick={() => onOpenModal(field.fieldNumber)}
                   size="sm"
                   variant="outline"
                 >
@@ -396,16 +434,18 @@ function FieldRolesPage() {
 
       {modalField !== null && (
         <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-          <div
-            aria-hidden
+          <button
+            aria-label="Close modal"
             className="absolute inset-0 bg-slate-950/60"
-            onClick={closeModal}
-          />
+            onClick={onCloseModal}
+            type="button"
+          >
+            {/* Modal backdrop - click to close */}
+          </button>
           <div
             aria-labelledby="assign-modal-title"
             aria-modal="true"
             className="relative w-full max-w-lg rounded-2xl border bg-card p-6 shadow-lg"
-            onClick={(event) => event.stopPropagation()}
             role="dialog"
           >
             <div className="space-y-2">
@@ -430,10 +470,7 @@ function FieldRolesPage() {
                 <Select
                   id={`modal-role-${modalField}`}
                   onChange={(e) =>
-                    handleRoleChange(
-                      modalField,
-                      e.target.value as FieldRoleValue
-                    )
+                    onRoleChange(modalField, e.target.value as FieldRoleValue)
                   }
                   value={modalFormData?.role || ""}
                 >
@@ -455,7 +492,7 @@ function FieldRolesPage() {
                 <Select
                   id={`modal-user-${modalField}`}
                   onChange={(e) =>
-                    updateFormData(modalField, "userId", e.target.value)
+                    onUpdateFormData(modalField, "userId", e.target.value)
                   }
                   value={modalFormData?.userId || ""}
                 >
@@ -469,7 +506,7 @@ function FieldRolesPage() {
               </div>
             </div>
             <div className="mt-6 flex flex-wrap justify-end gap-2">
-              <Button onClick={closeModal} size="sm" variant="ghost">
+              <Button onClick={onCloseModal} size="sm" variant="ghost">
                 Cancel
               </Button>
               <Button
@@ -478,7 +515,7 @@ function FieldRolesPage() {
                   Boolean(!modalFormData?.userId) ||
                   Boolean(!modalFormData?.role)
                 }
-                onClick={() => handleAssign(modalField)}
+                onClick={() => onAssign(modalField)}
                 size="sm"
               >
                 <UserPlus className="mr-2 h-4 w-4" />
@@ -496,5 +533,81 @@ function FieldRolesPage() {
         </div>
       )}
     </div>
+  );
+}
+
+function FieldRolesPage() {
+  const { tournamentId } = Route.useParams();
+  const { data: session } = authClient.useSession();
+
+  const isAdmin = (session?.user as { role?: string })?.role === "ADMIN";
+  const { rolesQuery, usersQuery, assignMutation, deleteMutation } =
+    useFieldRolesApi(tournamentId, isAdmin);
+
+  const users = usersQuery.data?.users || [];
+  const {
+    modalField,
+    modalFormData,
+    handleAssign,
+    openAssignModal,
+    closeModal,
+    updateFormData,
+    handleRoleChange,
+  } = useFieldRoleAssignForm(users, assignMutation);
+
+  if (!isAdmin) {
+    return (
+      <div className="container mx-auto max-w-5xl space-y-4 px-4 py-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Access Denied</CardTitle>
+            <CardDescription>
+              You need admin privileges to manage field roles.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      </div>
+    );
+  }
+
+  if (rolesQuery.isPending || usersQuery.isPending) {
+    return <Loader />;
+  }
+
+  if (rolesQuery.error || !rolesQuery.data) {
+    return (
+      <div className="container mx-auto max-w-5xl space-y-4 px-4 py-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Unable to load field roles</CardTitle>
+            <CardDescription>
+              {rolesQuery.error instanceof Error
+                ? rolesQuery.error.message
+                : "Please try again later."}
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      </div>
+    );
+  }
+
+  const { fields, assignments } = rolesQuery.data;
+
+  return (
+    <FieldRolesContent
+      assignMutation={assignMutation}
+      assignments={assignments}
+      deleteMutation={deleteMutation}
+      fields={fields}
+      modalField={modalField}
+      modalFormData={modalFormData}
+      onAssign={handleAssign}
+      onCloseModal={closeModal}
+      onOpenModal={openAssignModal}
+      onRoleChange={handleRoleChange}
+      onUpdateFormData={updateFormData}
+      tournamentId={tournamentId}
+      users={users}
+    />
   );
 }

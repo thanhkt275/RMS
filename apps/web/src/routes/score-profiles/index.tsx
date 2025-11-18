@@ -22,8 +22,18 @@ import type {
 export const Route = createFileRoute("/score-profiles/")({
   beforeLoad: async () => {
     const session = await authClient.getSession();
-    if (!session.data || session.data.user.role !== "ADMIN") {
-      throw redirect({ to: "/tournaments" });
+    const user = session.data?.user as { role?: string } | undefined;
+    if (!session.data || user?.role !== "ADMIN") {
+      throw redirect({
+        to: "/tournaments",
+        search: {
+          page: 1,
+          search: "",
+          status: "ALL",
+          sortField: "createdAt",
+          sortDirection: "desc",
+        },
+      });
     }
     return { session };
   },
@@ -33,7 +43,8 @@ export const Route = createFileRoute("/score-profiles/")({
 function ScoreProfilesPage() {
   const { session } = Route.useRouteContext();
   const queryClient = useQueryClient();
-  const isAdmin = session.data?.user.role === "ADMIN";
+  const user = session.data?.user as { role?: string } | undefined;
+  const isAdmin = user?.role === "ADMIN";
 
   const listQuery = useQuery<ScoreProfilesResponse>({
     queryKey: ["score-profiles"],
@@ -121,6 +132,7 @@ function ScoreProfilesPage() {
       toast.error("Profiles assigned to tournaments cannot be removed.");
       return;
     }
+    // biome-ignore lint: User confirmation needed for deletion
     const confirmed = window.confirm(`Delete score profile "${profile.name}"?`);
     if (!confirmed) {
       return;
@@ -139,7 +151,16 @@ function ScoreProfilesPage() {
         </div>
         <div className="flex gap-2">
           <Button asChild variant="secondary">
-            <Link search={{}} to="/tournaments">
+            <Link
+              search={{
+                page: 1,
+                search: "",
+                status: "ALL",
+                sortField: "createdAt",
+                sortDirection: "desc",
+              }}
+              to="/tournaments"
+            >
               Back to tournaments
             </Link>
           </Button>

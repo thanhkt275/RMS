@@ -11,7 +11,7 @@ import { toast } from "sonner";
 import z from "zod";
 import { FieldErrors, FormField } from "@/components/form-field";
 import Loader from "@/components/loader";
-import TeamMembersList from "@/components/team-members-list"; // Import the new component
+import TeamMembersList from "@/components/team-members-list";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -70,76 +70,84 @@ type FormValues = {
   status: TeamStatus;
 };
 
-export const Route = createFileRoute("/teams/$slug/edit")({
-  component: EditTeamPage,
-  beforeLoad: async ({ params }: { params: { slug: string } }) => {
-    const session = await authClient.getSession();
-    if (!session.data) {
-      throw redirect({
-        to: "/sign-in",
-      });
+async function fetchTeamForEdit(slug: string): Promise<{ session: unknown }> {
+  const session = await authClient.getSession();
+  if (!session.data) {
+    throw redirect({
+      to: "/sign-in",
+    });
+  }
+
+  const response = await fetch(
+    `${import.meta.env.VITE_SERVER_URL}/api/teams/${slug}`,
+    {
+      credentials: "include",
     }
-
-    // Fetch team to check if user is a mentor
-    const response = await fetch(
-      `${import.meta.env.VITE_SERVER_URL}/api/teams/${params.slug}`,
-      {
-        credentials: "include",
-      }
-    );
-
-    if (!response.ok) {
-      throw redirect({
-        to: "/teams",
-        search: {
-          page: 1,
-          statuses: [],
-          search: "",
-          sortField: "createdAt",
-          sortDirection: "desc",
-        },
-      });
-    }
-
-    const teamData = await response.json();
-
-    // Only TEAM_MENTOR can access this page
-    if (teamData.memberRole !== "TEAM_MENTOR") {
-      toast.error("Only team mentors can edit team settings");
-      // Use window.location since we can't use typed routes in beforeLoad
-      if (typeof window !== "undefined") {
-        window.location.href = `/teams/${params.slug}`;
-      }
-      throw new Error("Unauthorized");
-    }
-    return { session };
-  },
-});
-
-function EditTeamPage() {
-  const { slug } = Route.useParams();
-  const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<"settings" | "members">(
-    "settings"
   );
 
-  const teamQuery = useQuery<TeamDetail>({
-    queryKey: ["team", slug],
-    queryFn: async (): Promise<TeamDetail> => {
-      const response = await fetch(
-        `${import.meta.env.VITE_SERVER_URL}/api/teams/${slug}`,
-        {
-          credentials: "include",
-        }
-      );
-      if (!response.ok) {
-        throw new Error("Failed to fetch team details");
-      }
-      return response.json();
-    },
-  });
+  if (!response.ok) {
+    throw redirect({
+      to: "/teams",
+      search: {
+        page: 1,
+        search: "",
+        sortField: "createdAt",
+        sortDirection: "desc",
+      },
+    });
+  }
 
-  const updateTeam = useMutation({
+  const teamData = await response.json();
+
+  if (teamData.memberRole !== "TEAM_MENTOR") {
+    toast.error("Only team mentors can edit team settings");
+    if (typeof window !== "undefined") {
+      window.location.href = `/teams/${slug}`;
+    }
+    throw new Error("Unauthorized");
+  }
+
+  return { session };
+}
+
+export const Route = createFileRoute("/teams/$slug/edit")({
+  component: EditTeamPage,
+  beforeLoad: ({ params }: { params: { slug: string } }) =>
+    fetchTeamForEdit(params.slug),
+});
+
+function TeamNotFound({ error }: { error: unknown }) {
+  const errorMessage =
+    error instanceof Error ? error.message : "Failed to load team details.";
+
+  return (
+    <div className="container mx-auto max-w-2xl space-y-4 px-4 py-6">
+      <div>
+        <h1 className="font-bold text-3xl">Team Not Found</h1>
+        <p className="text-destructive">{errorMessage}</p>
+      </div>
+      <Button asChild variant="outline">
+        <Link
+          search={{
+            page: 1,
+            search: "",
+            sortField: "createdAt",
+            sortDirection: "desc",
+          }}
+          to="/teams"
+        >
+          Back to Teams
+        </Link>
+      </Button>
+    </div>
+  );
+}
+
+function useTeamMutation(
+  slug: string,
+  navigate: ReturnType<typeof useNavigate>
+) {
+  return useMutation({
     mutationFn: async (data: {
       name: string;
       description?: string;
@@ -180,6 +188,32 @@ function EditTeamPage() {
       toast.error(message);
     },
   });
+}
+
+function EditTeamPage() {
+  const { slug } = Route.useParams();
+  const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState<"settings" | "members">(
+    "settings"
+  );
+
+  const teamQuery = useQuery<TeamDetail>({
+    queryKey: ["team", slug],
+    queryFn: async (): Promise<TeamDetail> => {
+      const response = await fetch(
+        `${import.meta.env.VITE_SERVER_URL}/api/teams/${slug}`,
+        {
+          credentials: "include",
+        }
+      );
+      if (!response.ok) {
+        throw new Error("Failed to fetch team details");
+      }
+      return response.json();
+    },
+  });
+
+  const updateTeam = useTeamMutation(slug, navigate);
 
   const form = useForm({
     defaultValues: {
@@ -205,32 +239,7 @@ function EditTeamPage() {
   }
 
   if (teamQuery.error || !teamQuery.data) {
-    return (
-      <div className="container mx-auto max-w-2xl space-y-4 px-4 py-6">
-        <div>
-          <h1 className="font-bold text-3xl">Team Not Found</h1>
-          <p className="text-destructive">
-            {teamQuery.error instanceof Error
-              ? teamQuery.error.message
-              : "Failed to load team details."}
-          </p>
-        </div>
-        <Button asChild variant="outline">
-          <Link
-            search={{
-              page: 1,
-              statuses: [],
-              search: "",
-              sortField: "createdAt",
-              sortDirection: "desc",
-            }}
-            to="/teams"
-          >
-            Back to Teams
-          </Link>
-        </Button>
-      </div>
-    );
+    return <TeamNotFound error={teamQuery.error} />;
   }
 
   const allowedStatuses = getAllowedTeamStatuses();
@@ -299,7 +308,7 @@ function EditTeamPage() {
                         field.handleChange(event.target.value)
                       }
                       placeholder="Enter team name"
-                      value={field.state.value}
+                      value={String(field.state.value ?? "")}
                     />
                     <FieldErrors errors={field.state.meta.errors} />
                   </FormField>
@@ -317,7 +326,7 @@ function EditTeamPage() {
                         field.handleChange(event.target.value)
                       }
                       placeholder="e.g., 12345"
-                      value={field.state.value}
+                      value={String(field.state.value ?? "")}
                     />
                     <FieldErrors errors={field.state.meta.errors} />
                   </FormField>
@@ -335,7 +344,7 @@ function EditTeamPage() {
                         field.handleChange(event.target.value)
                       }
                       placeholder="City, State/Country"
-                      value={field.state.value}
+                      value={String(field.state.value ?? "")}
                     />
                     <FieldErrors errors={field.state.meta.errors} />
                   </FormField>
@@ -354,7 +363,7 @@ function EditTeamPage() {
                       }
                       placeholder="Tell others about your team..."
                       rows={4}
-                      value={field.state.value}
+                      value={String(field.state.value ?? "")}
                     />
                     <FieldErrors errors={field.state.meta.errors} />
                   </FormField>
@@ -376,7 +385,7 @@ function EditTeamPage() {
                       onChange={(event) =>
                         field.handleChange(event.target.value as TeamStatus)
                       }
-                      value={field.state.value}
+                      value={String(field.state.value ?? "DRAFT")}
                     >
                       {allowedStatuses.map((status) => {
                         const meta = formatStatus(status);
@@ -389,7 +398,9 @@ function EditTeamPage() {
                     </Select>
                     <p className="text-muted-foreground text-xs">
                       {(() => {
-                        const statusMeta = formatStatus(field.state.value);
+                        const statusMeta = formatStatus(
+                          field.state.value as TeamStatus
+                        );
                         return "description" in statusMeta
                           ? statusMeta.description
                           : "";
@@ -416,7 +427,11 @@ function EditTeamPage() {
       )}
 
       {activeTab === "members" && (
-        <TeamMembersList members={teamQuery.data.members} />
+        <TeamMembersList
+          currentUserRole={teamQuery.data.memberRole ?? undefined}
+          members={teamQuery.data.members}
+          teamSlug={slug}
+        />
       )}
 
       <Card className="border-destructive/50">

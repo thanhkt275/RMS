@@ -15,8 +15,8 @@ type StageSummary = {
   id: string;
   name: string;
   status: string;
-  stageOrder: number;
-  fieldCount: number;
+  order: number;
+  type: string;
 };
 
 type StageMatch = {
@@ -27,21 +27,16 @@ type StageMatch = {
     label?: string | null;
     fieldNumber?: number | null;
   } | null;
-  home: {
+  homeTeam: {
+    id: string | null;
     name: string;
-    placeholder: string | null;
+    logo: string | null;
   };
-  away: {
+  awayTeam: {
+    id: string | null;
     name: string;
-    placeholder: string | null;
+    logo: string | null;
   };
-};
-
-type StageDetail = {
-  id: string;
-  name: string;
-  fieldCount: number;
-  matches: StageMatch[];
 };
 
 type TournamentsResponse = {
@@ -101,24 +96,42 @@ export default function OrgNavigationSelector() {
 
   const stages = stagesData?.stages ?? [];
 
-  // Fetch selected stage details (matches + field counts)
-  const { data: stageDetail } = useQuery<StageDetail | null>({
-    queryKey: ["stage-detail", selectedTournament, selectedStage],
+  // Fetch matches for selected stage
+  const { data: matchesData } = useQuery<StageMatch[]>({
+    queryKey: ["stage-matches", selectedTournament, selectedStage],
     queryFn: async () => {
       if (!(selectedTournament && selectedStage)) {
-        return null;
+        return [];
       }
       const response = await fetch(
-        `${import.meta.env.VITE_SERVER_URL}/api/tournaments/${selectedTournament}/stages/${selectedStage}`,
+        `${import.meta.env.VITE_SERVER_URL}/api/tournaments/${selectedTournament}/stages/${selectedStage}/matches`,
         { credentials: "include" }
       );
       if (!response.ok) {
-        throw new Error("Failed to fetch stage");
+        throw new Error("Failed to fetch matches");
       }
-      const data = (await response.json()) as { stage?: StageDetail };
-      return data.stage ?? null;
+      return response.json();
     },
     enabled: !!selectedTournament && !!selectedStage,
+  });
+
+  // Fetch tournament details to get field count
+  const { data: tournamentDetail } = useQuery<{ fieldCount: number }>({
+    queryKey: ["tournament-detail", selectedTournament],
+    queryFn: async () => {
+      if (!selectedTournament) {
+        return { fieldCount: 1 };
+      }
+      const response = await fetch(
+        `${import.meta.env.VITE_SERVER_URL}/api/tournaments/${selectedTournament}`,
+        { credentials: "include" }
+      );
+      if (!response.ok) {
+        throw new Error("Failed to fetch tournament");
+      }
+      return response.json();
+    },
+    enabled: !!selectedTournament,
   });
 
   // Reset downstream selections when upstream changes
@@ -198,8 +211,8 @@ export default function OrgNavigationSelector() {
   }
 
   const getMatchLabel = (match: StageMatch) => {
-    const homeLabel = match.home.name || match.home.placeholder || "TBD";
-    const awayLabel = match.away.name || match.away.placeholder || "TBD";
+    const homeLabel = match.homeTeam.name || "TBD";
+    const awayLabel = match.awayTeam.name || "TBD";
     const prefix = match.metadata?.label || match.round || "Match";
     const fieldLabel = match.metadata?.fieldNumber
       ? ` (Field ${match.metadata.fieldNumber})`
@@ -207,8 +220,9 @@ export default function OrgNavigationSelector() {
     return `${prefix}: ${homeLabel} vs ${awayLabel}${fieldLabel}`;
   };
 
-  const availableFields = stageDetail?.fieldCount ?? 0;
-  const matchOptions = (stageDetail?.matches ?? []).filter((match) => {
+  const availableFields = tournamentDetail?.fieldCount ?? 0;
+  const allMatches = matchesData ?? [];
+  const matchOptions = allMatches.filter((match: StageMatch) => {
     if (!selectedField) {
       return true;
     }

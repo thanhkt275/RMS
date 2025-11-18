@@ -61,6 +61,8 @@ export const tournamentPayloadSchema = z
     fieldCount: z.number().int().min(1).max(50).default(1),
     resources: z.array(tournamentResourceSchema).default([]),
     scoreProfileId: scoreProfileIdSchema,
+    logo: z.string().url().optional().nullable(), // Added logo
+    coverImage: z.string().url().optional().nullable(), // Added coverImage
   })
   .refine(
     (value) => {
@@ -104,23 +106,32 @@ export const matchStatusSchema = z.enum([...matchStatuses] as [
 export const stagePayloadSchema = z.object({
   name: z.string().min(3).max(180),
   type: stageTypeSchema,
-  stageOrder: z.number().int().min(1).optional(),
+  order: z.number().int().min(1).optional(), // Changed from stageOrder
   teamIds: z.array(z.string().min(1)).min(2, "At least two teams are required"),
   status: stageStatusSchema.optional(),
   configuration: z.record(z.string(), z.unknown()).optional(),
+  scoreProfileId: scoreProfileIdSchema, // Added scoreProfileId
   generateMatches: z.boolean().optional().default(true),
 });
 
 export const stageUpdateSchema = z.object({
   name: z.string().min(3).max(180).optional(),
   type: stageTypeSchema.optional(),
-  stageOrder: z.number().int().min(1).optional(),
+  order: z.number().int().min(1).optional(), // Changed from stageOrder
   status: stageStatusSchema.optional(),
+  configuration: z.record(z.string(), z.unknown()).optional(), // Added configuration
+  scoreProfileId: scoreProfileIdSchema.optional(), // Added scoreProfileId
   teamIds: z.array(z.string().min(1)).min(2).optional(),
   regenerateMatches: z.boolean().optional(),
 });
 
 export const matchGenerationSchema = z.object({
+  format: z.enum(["ROUND_ROBIN", "DOUBLE_ELIMINATION"]),
+  options: z
+    .object({
+      doubleRoundRobin: z.boolean().optional(),
+    })
+    .optional(),
   teamIds: z.array(z.string().min(1)).optional(),
 });
 
@@ -129,7 +140,12 @@ export const matchUpdateSchema = z.object({
   homeScore: z.number().int().min(0).nullable().optional(),
   awayScore: z.number().int().min(0).nullable().optional(),
   scheduledAt: isoDateSchema.optional(),
+  homeTeamId: z.string().optional().nullable(), // Added
+  awayTeamId: z.string().optional().nullable(), // Added
+  metadata: z.record(z.string(), z.unknown()).optional().nullable(), // Added
 });
+
+export type MatchUpdateInput = z.infer<typeof matchUpdateSchema>;
 
 const fieldRoleValueSchema = z.string().min(1).optional().nullable();
 

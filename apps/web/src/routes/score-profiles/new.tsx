@@ -24,8 +24,18 @@ import { ScoreProfileForm } from "./score-profile-form";
 export const Route = createFileRoute("/score-profiles/new")({
   beforeLoad: async () => {
     const session = await authClient.getSession();
-    if (!session.data || session.data.user.role !== "ADMIN") {
-      throw redirect({ to: "/tournaments" });
+    const user = session.data?.user as { role?: string } | undefined;
+    if (!session.data || user?.role !== "ADMIN") {
+      throw redirect({
+        to: "/tournaments",
+        search: {
+          page: 1,
+          search: "",
+          status: "ALL",
+          sortField: "createdAt",
+          sortDirection: "desc",
+        },
+      });
     }
     return { session };
   },
@@ -34,7 +44,8 @@ export const Route = createFileRoute("/score-profiles/new")({
 
 function CreateScoreProfilePage() {
   const { session } = Route.useRouteContext();
-  const isAdmin = session.data?.user.role === "ADMIN";
+  const user = session.data?.user as { role?: string } | undefined;
+  const isAdmin = user?.role === "ADMIN";
   const navigate = useNavigate({ from: "/score-profiles/new" });
   const queryClient = useQueryClient();
 

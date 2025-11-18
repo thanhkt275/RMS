@@ -44,7 +44,7 @@ export const stageCreateFormSchema = z.object({
   stageOrder: z.coerce.number().int().positive().default(1),
   teamOrder: teamOrderSchema,
   generateMatches: z.boolean().default(true),
-}) satisfies z.ZodType<StageCreateFormValues>;
+});
 
 export const stageUpdateFormSchema = z.object({
   name: z.string().min(3).max(180),
@@ -53,4 +53,4 @@ export const stageUpdateFormSchema = z.object({
   stageOrder: z.coerce.number().int().positive().default(1),
   teamOrder: teamOrderSchema,
   regenerateMatches: z.boolean().default(false),
-}) satisfies z.ZodType<StageUpdateFormValues>;
+});

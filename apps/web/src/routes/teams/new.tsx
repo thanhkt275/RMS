@@ -149,7 +149,6 @@ function CreateTeamPage() {
           <Link
             search={{
               page: 1,
-              statuses: [],
               search: "",
               sortField: "createdAt",
               sortDirection: "desc",

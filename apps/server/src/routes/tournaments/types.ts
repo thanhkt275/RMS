@@ -5,7 +5,7 @@ import type {
   TournamentStageStatus,
   TournamentStageType,
 } from "@rms-modern/db/schema/organization";
-import type { MatchScheduleMetadata } from "../../utils/match-scheduler";
+// Removed MatchScheduleMetadata as it's unused
 
 export type StageMatchDependency = {
   targetMatchId: string;
@@ -18,9 +18,10 @@ export type StageMatchDependency = {
 };
 
 export type StageConfiguration = {
-  teamOrder: string[];
-  matchDependencies: StageMatchDependency[];
-  schedule?: MatchScheduleMetadata | null;
+  format?: "ROUND_ROBIN" | "DOUBLE_ELIMINATION";
+  doubleRoundRobin?: boolean;
+  // Add other stage-specific configuration properties here
+  [key: string]: any;
 };
 
 export type MatchMetadataSource = {
@@ -38,6 +39,7 @@ export type MatchMetadata = {
   matchIndex?: number;
   fieldNumber?: number;
   sources?: MatchMetadataSource[];
+  status?: MatchStatus; // Added status to metadata
 };
 
 export type StageRecord = {
@@ -47,12 +49,25 @@ export type StageRecord = {
   type: TournamentStageType;
   status: TournamentStageStatus;
   stageOrder: number;
-  configuration: string | null;
+  configuration: string | null; // Stored as stringified JSON
+  scoreProfileId: string | null;
   createdAt: Date;
   updatedAt: Date;
   startedAt: Date | null;
   completedAt: Date | null;
-  fieldCount: number;
+};
+
+export type StageRecordWithTeams = StageRecord & {
+  teams: Array<{
+    organizationId: string;
+    seed: number | null;
+    organization: {
+      name: string;
+      slug: string;
+      logo: string | null;
+      location: string | null;
+    };
+  }>;
 };
 
 type ScoreProfileRow = typeof OrganizationSchema.scoreProfiles.$inferSelect;
@@ -65,11 +80,12 @@ export type ScoreProfileSummary = Pick<
 export type StageMatchSeed = {
   id: string;
   round: string;
-  homeTeamId?: string | null;
-  awayTeamId?: string | null;
-  homePlaceholder?: string | null;
-  awayPlaceholder?: string | null;
-  metadata?: MatchMetadata;
+  homeTeamId: string | null;
+  awayTeamId: string | null;
+  homePlaceholder: string | null;
+  awayPlaceholder: string | null;
+  metadata: MatchMetadata;
+  status: MatchStatus;
 };
 
 export type StageGenerationResult = {
@@ -236,16 +252,14 @@ export type StageResponse = {
   name: string;
   type: TournamentStageType;
   status: TournamentStageStatus;
-  stageOrder: number;
-  fieldCount: number;
-  configuration: StageConfiguration;
-  teamCount: number;
+  order: number; // Changed from stageOrder
+  scoreProfileId: string | null; // Added scoreProfileId
+  configuration: StageConfiguration; // Changed to object type
   createdAt: string | null;
   updatedAt: string | null;
   startedAt: string | null;
   completedAt: string | null;
   teams: StageResponseTeam[];
-  matches: StageResponseMatch[];
-  rankings: StageResponseRanking[];
   warnings?: string[];
+  // Removed fieldCount, matches, rankings as they are aggregated
 };

@@ -8,7 +8,7 @@ import {
 } from "@/utils/tournaments";
 
 export type ResourceField = {
-  id: string;
+  id?: string;
   title: string;
   url: string;
   type: TournamentResourceType;
@@ -93,7 +93,7 @@ export const tournamentFormSchema = z
       message: "Deadline must be before the start",
       path: ["registrationDeadline"],
     }
-  ) satisfies z.ZodType<TournamentFormValues>;
+  );
 
 export function createResourceField(
   overrides?: Partial<ResourceField>

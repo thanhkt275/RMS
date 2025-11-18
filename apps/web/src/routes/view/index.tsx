@@ -50,7 +50,8 @@ function ViewTournamentsPage() {
       params.set("pageSize", "100");
 
       const response = await fetch(
-        `${import.meta.env.VITE_SERVER_URL}/api/tournaments?${params.toString()}`
+        `${import.meta.env.VITE_SERVER_URL}/api/tournaments?${params.toString()}`,
+        { credentials: "include" }
       );
 
       if (!response.ok) {

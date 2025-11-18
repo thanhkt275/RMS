@@ -141,7 +141,7 @@ type Stage = {
   name: string;
   type: string;
   status: TournamentStageStatus;
-  stageOrder: number;
+  order: number;
   createdAt: string | null;
   startedAt: string | null;
   completedAt: string | null;
@@ -640,7 +640,7 @@ function TournamentStagesPage() {
       ) : (
         stages
           .slice()
-          .sort((a, b) => a.stageOrder - b.stageOrder)
+          .sort((a, b) => a.order - b.order)
           .map((stage) => (
             <StageCard
               isAdmin={isAdmin}
@@ -773,7 +773,7 @@ function StageCard({
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           <div className="rounded-md border p-3">
             <p className="text-muted-foreground text-sm">Stage order</p>
-            <p className="font-semibold text-2xl">{stage.stageOrder}</p>
+            <p className="font-semibold text-2xl">{stage.order}</p>
           </div>
           <div className="rounded-md border p-3">
             <p className="text-muted-foreground text-sm">Teams</p>
@@ -1103,14 +1103,21 @@ function MatchRow({ match, isAdmin, isPending, onSave }: MatchRowProps) {
 
   const homeScoreValue = match.score.home;
   const awayScoreValue = match.score.away;
-  const winner =
-    homeScoreValue != null && awayScoreValue != null
-      ? homeScoreValue > awayScoreValue
-        ? "home"
-        : homeScoreValue < awayScoreValue
-          ? "away"
-          : null
-      : null;
+
+  const getWinner = (): "home" | "away" | null => {
+    if (homeScoreValue == null || awayScoreValue == null) {
+      return null;
+    }
+    if (homeScoreValue > awayScoreValue) {
+      return "home";
+    }
+    if (homeScoreValue < awayScoreValue) {
+      return "away";
+    }
+    return null;
+  };
+
+  const winner = getWinner();
 
   const homeScoreClasses = cn(
     "px-2 py-3 text-right font-semibold",
