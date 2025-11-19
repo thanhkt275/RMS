@@ -22,6 +22,11 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { authClient } from "@/lib/auth-client";
+import {
+  ACCESS_RULES,
+  type AccessControlUser,
+  meetsAccessRule,
+} from "@/utils/access-control";
 import { toDateTimeLocalValue } from "@/utils/date";
 import { queryClient } from "@/utils/query-client";
 import type { ScoreProfilesResponse } from "@/utils/score-profiles";
@@ -74,10 +79,13 @@ export const Route = createFileRoute("/tournaments/$tournamentId/edit")({
   component: EditTournamentPage,
   beforeLoad: async () => {
     const session = await authClient.getSession();
-    if (
-      !session.data ||
-      (session.data.user as { role?: string }).role !== "ADMIN"
-    ) {
+    const user = session.data?.user as AccessControlUser | undefined;
+    if (!meetsAccessRule(user, ACCESS_RULES.registeredOnly)) {
+      throw redirect({
+        to: "/sign-in",
+      });
+    }
+    if (!meetsAccessRule(user, ACCESS_RULES.adminOnly)) {
       throw redirect({
         to: "/tournaments",
         search: {

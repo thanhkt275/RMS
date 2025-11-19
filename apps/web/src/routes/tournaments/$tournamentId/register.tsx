@@ -28,6 +28,11 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { authClient } from "@/lib/auth-client";
+import {
+  ACCESS_RULES,
+  type AccessControlUser,
+  meetsAccessRule,
+} from "@/utils/access-control";
 import type { RegistrationStep } from "@/types/registration";
 import { formatDateTime } from "@/utils/date";
 import { queryClient } from "@/utils/query-client";
@@ -75,7 +80,8 @@ export const Route = createFileRoute("/tournaments/$tournamentId/register")({
   component: RegisterTeamPage,
   beforeLoad: async () => {
     const session = await authClient.getSession();
-    if (!session.data) {
+    const user = session.data?.user as AccessControlUser | undefined;
+    if (!meetsAccessRule(user, ACCESS_RULES.registeredOnly)) {
       throw redirect({ to: "/sign-in" });
     }
     return { session };

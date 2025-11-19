@@ -24,6 +24,11 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { authClient } from "@/lib/auth-client";
+import {
+  ACCESS_RULES,
+  type AccessControlUser,
+  meetsAccessRule,
+} from "@/utils/access-control";
 import { queryClient } from "@/utils/query-client";
 import {
   formatStatus,
@@ -72,7 +77,8 @@ type FormValues = {
 
 async function fetchTeamForEdit(slug: string): Promise<{ session: unknown }> {
   const session = await authClient.getSession();
-  if (!session.data) {
+  const user = session.data?.user as AccessControlUser | undefined;
+  if (!meetsAccessRule(user, ACCESS_RULES.registeredOnly)) {
     throw redirect({
       to: "/sign-in",
     });

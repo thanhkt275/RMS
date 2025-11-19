@@ -23,21 +23,46 @@ export type UserType = "REGULAR" | "ORG";
 export type AccessRule = {
   roles?: readonly AppRole[];
   userTypes?: readonly UserType[];
+  requireSession?: boolean;
+  requireRegisteredUser?: boolean;
+  requireAnonymousUser?: boolean;
 };
 
 export type AccessControlUser = {
+  id?: string;
   role?: string | null;
   type?: string | null;
+  isAnonymous?: boolean | null;
 };
 
 export const ACCESS_RULES = {
+  public: {},
+  sessionOnly: {
+    requireSession: true,
+  },
+  anonymousOnly: {
+    requireAnonymousUser: true,
+  },
+  registeredOnly: {
+    requireRegisteredUser: true,
+  },
   adminOnly: {
+    requireRegisteredUser: true,
     roles: ["ADMIN"] as const,
   },
   orgStaffOnly: {
+    requireRegisteredUser: true,
     roles: ORG_ROLES,
   },
 } as const satisfies Record<string, AccessRule>;
+
+export function isAnonymousUser(user?: AccessControlUser | null) {
+  return Boolean(user?.isAnonymous);
+}
+
+export function isRegisteredUser(user?: AccessControlUser | null) {
+  return Boolean(user && !isAnonymousUser(user));
+}
 
 function normalizeRole(role?: string | null): AppRole | null {
   if (!role) {
@@ -61,6 +86,16 @@ export function meetsAccessRule(
 ) {
   if (!rule) {
     return true;
+  }
+  if (rule.requireAnonymousUser) {
+    return isAnonymousUser(user);
+  }
+  if (rule.requireRegisteredUser) {
+    if (!isRegisteredUser(user)) {
+      return false;
+    }
+  } else if (rule.requireSession && !user) {
+    return false;
   }
   const meetsRole =
     !rule.roles?.length ||
@@ -86,3 +121,4 @@ export function meetsAccessRule(
 export function isAdminUser(user?: AccessControlUser | null) {
   return meetsAccessRule(user ?? undefined, ACCESS_RULES.adminOnly);
 }
+

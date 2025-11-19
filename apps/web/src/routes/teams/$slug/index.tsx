@@ -26,6 +26,11 @@ import {
 } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { authClient } from "@/lib/auth-client";
+import {
+  ACCESS_RULES,
+  type AccessControlUser,
+  meetsAccessRule,
+} from "@/utils/access-control";
 import type { RegistrationStatus } from "@/types/registration";
 import { getRegistrationStatusMeta } from "@/utils/registrations";
 import { formatRole, formatStatus } from "@/utils/teams";
@@ -176,12 +181,24 @@ export const Route = createFileRoute("/teams/$slug/")({
   component: TeamDetailPage,
   beforeLoad: async () => {
     const session = await authClient.getSession();
-    if (!session.data) {
+    const rawUser = session.data?.user;
+    const user = rawUser as AccessControlUser | undefined;
+    if (!rawUser) {
       throw redirect({
         to: "/sign-in",
       });
     }
-    return { userId: session.data.user.id };
+    if (!meetsAccessRule(user, ACCESS_RULES.registeredOnly)) {
+      throw redirect({
+        to: "/sign-in",
+      });
+    }
+    if (!rawUser.id) {
+      throw redirect({
+        to: "/sign-in",
+      });
+    }
+    return { userId: rawUser.id as string };
   },
 });
 
@@ -189,7 +206,7 @@ function TeamDetailPage() {
   const { slug } = Route.useParams();
   const [showInviteForm, setShowInviteForm] = useState(false);
   const [showAvatarForm, setShowAvatarForm] = useState(false);
-  const { userId } = Route.useRouteContext();
+  const { userId } = Route.useRouteContext() as { userId: string };
 
   const teamQuery = useQuery<TeamDetail>({
     queryKey: ["team", slug],
@@ -862,11 +879,12 @@ function TournamentsTab({ team, isMentor }: TabProps) {
               const registrationStatusMeta = showRegistrationBadge
                 ? getRegistrationStatusMeta(tournament.registrationStatus)
                 : undefined;
-              const showRegistrationAction = Boolean(
+              const registrationId = tournament.registrationId;
+              const showRegistrationAction =
+                Boolean(
                 tournament.registrationStatus &&
-                  tournament.registrationStatus !== "APPROVED" &&
-                  tournament.registrationId
-              );
+                    tournament.registrationStatus !== "APPROVED"
+                ) && Boolean(registrationId);
               const actionLabel = getRegistrationActionLabel(
                 tournament.registrationStatus
               );
@@ -901,12 +919,12 @@ function TournamentsTab({ team, isMentor }: TabProps) {
                         </Badge>
                       )}
                     </div>
-                    {showRegistrationAction && (
+                    {showRegistrationAction && registrationId && (
                       <Button asChild size="sm" variant="secondary">
                         <Link
                           params={{
                             tournamentId: tournament.slug,
-                            registrationId: tournament.registrationId,
+                            registrationId,
                           }}
                           to="/tournaments/$tournamentId/registration/$registrationId"
                         >

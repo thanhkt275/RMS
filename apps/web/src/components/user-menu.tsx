@@ -8,18 +8,22 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { authClient } from "@/lib/auth-client";
+import { type AccessControlUser, isAnonymousUser } from "@/utils/access-control";
 import { Button } from "./ui/button";
 import { Skeleton } from "./ui/skeleton";
 
 export default function UserMenu() {
   const navigate = useNavigate();
   const { data: session, isPending } = authClient.useSession();
+  const anonymous = isAnonymousUser(
+    session?.user as AccessControlUser | undefined
+  );
 
   if (isPending) {
     return <Skeleton className="h-9 w-24" />;
   }
 
-  if (!session) {
+  if (!session || anonymous) {
     return (
       <Button asChild variant="outline">
         <Link to="/login">Sign In</Link>

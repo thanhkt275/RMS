@@ -24,6 +24,11 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { authClient } from "@/lib/auth-client";
 import {
+  ACCESS_RULES,
+  type AccessControlUser,
+  meetsAccessRule,
+} from "@/utils/access-control";
+import {
   TOURNAMENT_STAGE_STATUSES,
   TOURNAMENT_STAGE_TYPES,
   type TournamentStageType,
@@ -51,10 +56,13 @@ export const Route = createFileRoute("/tournaments/$tournamentId/stages/new")({
   component: CreateStagePage,
   beforeLoad: async ({ params }) => {
     const session = await authClient.getSession();
-    if (
-      !session.data ||
-      (session.data.user as { role?: string }).role !== "ADMIN"
-    ) {
+    const user = session.data?.user as AccessControlUser | undefined;
+    if (!meetsAccessRule(user, ACCESS_RULES.registeredOnly)) {
+      throw redirect({
+        to: "/sign-in",
+      });
+    }
+    if (!meetsAccessRule(user, ACCESS_RULES.adminOnly)) {
       throw redirect({
         params,
         to: "/tournaments/$tournamentId/stages",

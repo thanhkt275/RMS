@@ -24,14 +24,14 @@ type SidebarLink = {
 };
 
 const NAV_LINKS: readonly SidebarLink[] = [
-  { to: "/", label: "Home", icon: Home },
+  { to: "/", label: "Home", icon: Home, access: ACCESS_RULES.registeredOnly },
   {
     to: "/dashboard",
     label: "Dashboard",
     icon: LayoutDashboard,
     access: ACCESS_RULES.adminOnly,
   },
-  { to: "/teams", label: "Teams", icon: Users },
+  { to: "/teams", label: "Teams", icon: Users, access: ACCESS_RULES.registeredOnly },
   {
     to: "/score-profiles",
     label: "Score profiles",

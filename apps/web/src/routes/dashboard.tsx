@@ -27,7 +27,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { authClient } from "@/lib/auth-client";
-import { type AccessControlUser, isAdminUser } from "@/utils/access-control";
+import {
+  ACCESS_RULES,
+  type AccessControlUser,
+  isAdminUser,
+  meetsAccessRule,
+} from "@/utils/access-control";
 import { formatDate } from "@/utils/date";
 import {
   getTournamentStatusMeta,
@@ -114,13 +119,13 @@ export const Route = createFileRoute("/dashboard")({
   component: AdminDashboardPage,
   beforeLoad: async () => {
     const session = await authClient.getSession();
-    if (!session.data) {
+    const user = session.data?.user as AccessControlUser | undefined;
+    if (!meetsAccessRule(user, ACCESS_RULES.registeredOnly)) {
       redirect({
         to: "/sign-in",
         throw: true,
       });
     }
-    const user = session.data.user as AccessControlUser | undefined;
     if (!isAdminUser(user)) {
       redirect({
         to: "/",

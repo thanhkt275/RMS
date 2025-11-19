@@ -15,6 +15,11 @@ import {
 } from "@/components/ui/card";
 import { authClient } from "@/lib/auth-client";
 import {
+  ACCESS_RULES,
+  type AccessControlUser,
+  meetsAccessRule,
+} from "@/utils/access-control";
+import {
   createEmptyScoreProfileValues,
   mapFormValuesToPayload,
   type ScoreProfileFormValues,
@@ -24,8 +29,13 @@ import { ScoreProfileForm } from "./score-profile-form";
 export const Route = createFileRoute("/score-profiles/new")({
   beforeLoad: async () => {
     const session = await authClient.getSession();
-    const user = session.data?.user as { role?: string } | undefined;
-    if (!session.data || user?.role !== "ADMIN") {
+    const user = session.data?.user as AccessControlUser | undefined;
+    if (!meetsAccessRule(user, ACCESS_RULES.registeredOnly)) {
+      throw redirect({
+        to: "/sign-in",
+      });
+    }
+    if (!meetsAccessRule(user, ACCESS_RULES.adminOnly)) {
       throw redirect({
         to: "/tournaments",
         search: {
