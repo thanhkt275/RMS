@@ -200,11 +200,25 @@ export type TournamentStageType = (typeof tournamentStageTypes)[number];
 
 export const matchStatuses = [
   "SCHEDULED",
+  "READY",
   "IN_PROGRESS",
   "COMPLETED",
   "CANCELED",
 ] as const;
 export type MatchStatus = (typeof matchStatuses)[number];
+
+export const matchRobotStatuses = ["PASS", "FAIL"] as const;
+export type MatchRobotStatus = (typeof matchRobotStatuses)[number];
+
+export const matchTypes = ["NORMAL", "SURROGATE"] as const;
+export type MatchType = (typeof matchTypes)[number];
+
+export const matchFormats = [
+  "ROUND_ROBIN",
+  "DOUBLE_ELIMINATION",
+  "CUSTOM",
+] as const;
+export type MatchFormat = (typeof matchFormats)[number];
 
 export const tournamentFieldRoles = [
   "TSO",
@@ -213,6 +227,32 @@ export const tournamentFieldRoles = [
   "QUEUER",
 ] as const;
 export type TournamentFieldRole = (typeof tournamentFieldRoles)[number];
+
+export const tournamentRegistrationStatuses = [
+  "IN_PROGRESS",
+  "SUBMITTED",
+  "UNDER_REVIEW",
+  "APPROVED",
+  "REJECTED",
+] as const;
+export type TournamentRegistrationStatus =
+  (typeof tournamentRegistrationStatuses)[number];
+
+export const tournamentRegistrationStepTypes = [
+  "INFO",
+  "FILE_UPLOAD",
+  "CONSENT",
+] as const;
+export type TournamentRegistrationStepType =
+  (typeof tournamentRegistrationStepTypes)[number];
+
+export const tournamentRegistrationSubmissionStatuses = [
+  "PENDING",
+  "APPROVED",
+  "REJECTED",
+] as const;
+export type TournamentRegistrationSubmissionStatus =
+  (typeof tournamentRegistrationSubmissionStatuses)[number];
 
 export const tournaments = sqliteTable("tournament", {
   id: text("id").primaryKey(),
@@ -320,6 +360,14 @@ export const tournamentParticipations = sqliteTable(
     registeredBy: text("registered_by").references(() => user.id, {
       onDelete: "set null",
     }),
+    status: text("status")
+      .$type<TournamentRegistrationStatus>()
+      .notNull()
+      .default("IN_PROGRESS"),
+    consentAcceptedAt: integer("consent_accepted_at", { mode: "timestamp" }),
+    consentAcceptedBy: text("consent_accepted_by").references(() => user.id, {
+      onDelete: "set null",
+    }),
     seed: integer("seed"),
     placement: text("placement"),
     result: text("result"),
@@ -388,6 +436,86 @@ export const tournamentStageTeams = sqliteTable(
   })
 );
 
+export const tournamentRegistrationSteps = sqliteTable(
+  "tournament_registration_step",
+  {
+    id: text("id").primaryKey(),
+    tournamentId: text("tournament_id")
+      .notNull()
+      .references(() => tournaments.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    description: text("description"),
+    stepType: text("step_type")
+      .$type<TournamentRegistrationStepType>()
+      .notNull()
+      .default("INFO"),
+    isRequired: integer("is_required", { mode: "boolean" })
+      .notNull()
+      .default(true),
+    stepOrder: integer("step_order").notNull().default(1),
+    metadata: text("metadata"),
+    createdBy: text("created_by").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    updatedBy: text("updated_by").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch('now'))`),
+    updatedAt: integer("updated_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch('now'))`),
+  }
+);
+
+export const tournamentRegistrationSubmissions = sqliteTable(
+  "tournament_registration_submission",
+  {
+    id: text("id").primaryKey(),
+    tournamentId: text("tournament_id")
+      .notNull()
+      .references(() => tournaments.id, { onDelete: "cascade" }),
+    participationId: text("participation_id")
+      .notNull()
+      .references(() => tournamentParticipations.id, { onDelete: "cascade" }),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    stepId: text("step_id")
+      .notNull()
+      .references(() => tournamentRegistrationSteps.id, {
+        onDelete: "cascade",
+      }),
+    status: text("status")
+      .$type<TournamentRegistrationSubmissionStatus>()
+      .notNull()
+      .default("PENDING"),
+    payload: text("payload"),
+    submittedAt: integer("submitted_at", { mode: "timestamp" }),
+    submittedBy: text("submitted_by").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    reviewedAt: integer("reviewed_at", { mode: "timestamp" }),
+    reviewedBy: text("reviewed_by").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    reviewNotes: text("review_notes"),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch('now'))`),
+    updatedAt: integer("updated_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch('now'))`),
+  },
+  (table) => ({
+    uniqueSubmission: uniqueIndex("registration_submission_unique_idx").on(
+      table.participationId,
+      table.stepId
+    ),
+  })
+);
+
 export const tournamentStageRankings = sqliteTable(
   "tournament_stage_ranking",
   {
@@ -444,6 +572,12 @@ export const tournamentMatches = sqliteTable("tournament_match", {
   homePlaceholder: text("home_placeholder"),
   awayPlaceholder: text("away_placeholder"),
   metadata: text("metadata"),
+  homeRobotStatus: text("home_robot_status").$type<MatchRobotStatus | null>(),
+  homeRobotNotes: text("home_robot_notes"),
+  awayRobotStatus: text("away_robot_status").$type<MatchRobotStatus | null>(),
+  awayRobotNotes: text("away_robot_notes"),
+  matchType: text("match_type").$type<MatchType>().notNull().default("NORMAL"),
+  format: text("format").$type<MatchFormat | null>(),
   homeScore: integer("home_score"),
   awayScore: integer("away_score"),
   createdAt: integer("created_at", { mode: "timestamp" })
@@ -534,6 +668,8 @@ export const tournamentsRelations = relations(tournaments, ({ many }) => ({
   resources: many(tournamentResources),
   fieldAssignments: many(tournamentFieldAssignments),
   matches: many(tournamentMatches),
+  registrationSteps: many(tournamentRegistrationSteps),
+  registrationSubmissions: many(tournamentRegistrationSubmissions),
 }));
 
 export const organizationsRelations = relations(organizations, ({ many }) => ({
@@ -546,7 +682,7 @@ export const organizationsRelations = relations(organizations, ({ many }) => ({
 
 export const tournamentParticipationsRelations = relations(
   tournamentParticipations,
-  ({ one }) => ({
+  ({ one, many }) => ({
     tournament: one(tournaments, {
       fields: [tournamentParticipations.tournamentId],
       references: [tournaments.id],
@@ -555,6 +691,7 @@ export const tournamentParticipationsRelations = relations(
       fields: [tournamentParticipations.organizationId],
       references: [organizations.id],
     }),
+    submissions: many(tournamentRegistrationSubmissions),
   })
 );
 
@@ -578,6 +715,39 @@ export const tournamentStageRankingsRelations = relations(
     organization: one(organizations, {
       fields: [tournamentStageRankings.organizationId],
       references: [organizations.id],
+    }),
+  })
+);
+
+export const tournamentRegistrationStepsRelations = relations(
+  tournamentRegistrationSteps,
+  ({ one, many }) => ({
+    tournament: one(tournaments, {
+      fields: [tournamentRegistrationSteps.tournamentId],
+      references: [tournaments.id],
+    }),
+    submissions: many(tournamentRegistrationSubmissions),
+  })
+);
+
+export const tournamentRegistrationSubmissionsRelations = relations(
+  tournamentRegistrationSubmissions,
+  ({ one }) => ({
+    tournament: one(tournaments, {
+      fields: [tournamentRegistrationSubmissions.tournamentId],
+      references: [tournaments.id],
+    }),
+    participation: one(tournamentParticipations, {
+      fields: [tournamentRegistrationSubmissions.participationId],
+      references: [tournamentParticipations.id],
+    }),
+    organization: one(organizations, {
+      fields: [tournamentRegistrationSubmissions.organizationId],
+      references: [organizations.id],
+    }),
+    step: one(tournamentRegistrationSteps, {
+      fields: [tournamentRegistrationSubmissions.stepId],
+      references: [tournamentRegistrationSteps.id],
     }),
   })
 );

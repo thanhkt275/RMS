@@ -30,6 +30,7 @@ import { Route as MatchesMatchIdRouteImport } from './routes/matches/$matchId'
 import { Route as ViewTournamentIdIndexRouteImport } from './routes/view/$tournamentId/index'
 import { Route as TournamentsTournamentIdIndexRouteImport } from './routes/tournaments/$tournamentId/index'
 import { Route as TeamsSlugIndexRouteImport } from './routes/teams/$slug/index'
+import { Route as TournamentsTournamentIdRegistrationsRouteImport } from './routes/tournaments/$tournamentId/registrations'
 import { Route as TournamentsTournamentIdRegisterRouteImport } from './routes/tournaments/$tournamentId/register'
 import { Route as TournamentsTournamentIdFieldRolesRouteImport } from './routes/tournaments/$tournamentId/field-roles'
 import { Route as TournamentsTournamentIdEditRouteImport } from './routes/tournaments/$tournamentId/edit'
@@ -37,6 +38,7 @@ import { Route as TeamsSlugEditRouteImport } from './routes/teams/$slug/edit'
 import { Route as ViewTournamentIdStageIdIndexRouteImport } from './routes/view/$tournamentId/$stageId/index'
 import { Route as TournamentsTournamentIdStagesIndexRouteImport } from './routes/tournaments/$tournamentId/stages/index'
 import { Route as TournamentsTournamentIdStagesNewRouteImport } from './routes/tournaments/$tournamentId/stages/new'
+import { Route as TournamentsTournamentIdRegistrationRegistrationIdRouteImport } from './routes/tournaments/$tournamentId/registration/$registrationId'
 import { Route as TournamentsTournamentIdStagesStageIdLiveRouteImport } from './routes/tournaments/$tournamentId/stages/$stageId/live'
 import { Route as TournamentsTournamentIdStagesStageIdEditRouteImport } from './routes/tournaments/$tournamentId/stages/$stageId/edit'
 
@@ -147,6 +149,12 @@ const TeamsSlugIndexRoute = TeamsSlugIndexRouteImport.update({
   path: '/teams/$slug/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const TournamentsTournamentIdRegistrationsRoute =
+  TournamentsTournamentIdRegistrationsRouteImport.update({
+    id: '/tournaments/$tournamentId/registrations',
+    path: '/tournaments/$tournamentId/registrations',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const TournamentsTournamentIdRegisterRoute =
   TournamentsTournamentIdRegisterRouteImport.update({
     id: '/tournaments/$tournamentId/register',
@@ -188,6 +196,12 @@ const TournamentsTournamentIdStagesNewRoute =
     path: '/tournaments/$tournamentId/stages/new',
     getParentRoute: () => rootRouteImport,
   } as any)
+const TournamentsTournamentIdRegistrationRegistrationIdRoute =
+  TournamentsTournamentIdRegistrationRegistrationIdRouteImport.update({
+    id: '/tournaments/$tournamentId/registration/$registrationId',
+    path: '/tournaments/$tournamentId/registration/$registrationId',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const TournamentsTournamentIdStagesStageIdLiveRoute =
   TournamentsTournamentIdStagesStageIdLiveRouteImport.update({
     id: '/tournaments/$tournamentId/stages/$stageId/live',
@@ -224,9 +238,11 @@ export interface FileRoutesByFullPath {
   '/tournaments/$tournamentId/edit': typeof TournamentsTournamentIdEditRoute
   '/tournaments/$tournamentId/field-roles': typeof TournamentsTournamentIdFieldRolesRoute
   '/tournaments/$tournamentId/register': typeof TournamentsTournamentIdRegisterRoute
+  '/tournaments/$tournamentId/registrations': typeof TournamentsTournamentIdRegistrationsRoute
   '/teams/$slug': typeof TeamsSlugIndexRoute
   '/tournaments/$tournamentId': typeof TournamentsTournamentIdIndexRoute
   '/view/$tournamentId': typeof ViewTournamentIdIndexRoute
+  '/tournaments/$tournamentId/registration/$registrationId': typeof TournamentsTournamentIdRegistrationRegistrationIdRoute
   '/tournaments/$tournamentId/stages/new': typeof TournamentsTournamentIdStagesNewRoute
   '/tournaments/$tournamentId/stages': typeof TournamentsTournamentIdStagesIndexRoute
   '/view/$tournamentId/$stageId': typeof ViewTournamentIdStageIdIndexRoute
@@ -256,9 +272,11 @@ export interface FileRoutesByTo {
   '/tournaments/$tournamentId/edit': typeof TournamentsTournamentIdEditRoute
   '/tournaments/$tournamentId/field-roles': typeof TournamentsTournamentIdFieldRolesRoute
   '/tournaments/$tournamentId/register': typeof TournamentsTournamentIdRegisterRoute
+  '/tournaments/$tournamentId/registrations': typeof TournamentsTournamentIdRegistrationsRoute
   '/teams/$slug': typeof TeamsSlugIndexRoute
   '/tournaments/$tournamentId': typeof TournamentsTournamentIdIndexRoute
   '/view/$tournamentId': typeof ViewTournamentIdIndexRoute
+  '/tournaments/$tournamentId/registration/$registrationId': typeof TournamentsTournamentIdRegistrationRegistrationIdRoute
   '/tournaments/$tournamentId/stages/new': typeof TournamentsTournamentIdStagesNewRoute
   '/tournaments/$tournamentId/stages': typeof TournamentsTournamentIdStagesIndexRoute
   '/view/$tournamentId/$stageId': typeof ViewTournamentIdStageIdIndexRoute
@@ -289,9 +307,11 @@ export interface FileRoutesById {
   '/tournaments/$tournamentId/edit': typeof TournamentsTournamentIdEditRoute
   '/tournaments/$tournamentId/field-roles': typeof TournamentsTournamentIdFieldRolesRoute
   '/tournaments/$tournamentId/register': typeof TournamentsTournamentIdRegisterRoute
+  '/tournaments/$tournamentId/registrations': typeof TournamentsTournamentIdRegistrationsRoute
   '/teams/$slug/': typeof TeamsSlugIndexRoute
   '/tournaments/$tournamentId/': typeof TournamentsTournamentIdIndexRoute
   '/view/$tournamentId/': typeof ViewTournamentIdIndexRoute
+  '/tournaments/$tournamentId/registration/$registrationId': typeof TournamentsTournamentIdRegistrationRegistrationIdRoute
   '/tournaments/$tournamentId/stages/new': typeof TournamentsTournamentIdStagesNewRoute
   '/tournaments/$tournamentId/stages/': typeof TournamentsTournamentIdStagesIndexRoute
   '/view/$tournamentId/$stageId/': typeof ViewTournamentIdStageIdIndexRoute
@@ -323,9 +343,11 @@ export interface FileRouteTypes {
     | '/tournaments/$tournamentId/edit'
     | '/tournaments/$tournamentId/field-roles'
     | '/tournaments/$tournamentId/register'
+    | '/tournaments/$tournamentId/registrations'
     | '/teams/$slug'
     | '/tournaments/$tournamentId'
     | '/view/$tournamentId'
+    | '/tournaments/$tournamentId/registration/$registrationId'
     | '/tournaments/$tournamentId/stages/new'
     | '/tournaments/$tournamentId/stages'
     | '/view/$tournamentId/$stageId'
@@ -355,9 +377,11 @@ export interface FileRouteTypes {
     | '/tournaments/$tournamentId/edit'
     | '/tournaments/$tournamentId/field-roles'
     | '/tournaments/$tournamentId/register'
+    | '/tournaments/$tournamentId/registrations'
     | '/teams/$slug'
     | '/tournaments/$tournamentId'
     | '/view/$tournamentId'
+    | '/tournaments/$tournamentId/registration/$registrationId'
     | '/tournaments/$tournamentId/stages/new'
     | '/tournaments/$tournamentId/stages'
     | '/view/$tournamentId/$stageId'
@@ -387,9 +411,11 @@ export interface FileRouteTypes {
     | '/tournaments/$tournamentId/edit'
     | '/tournaments/$tournamentId/field-roles'
     | '/tournaments/$tournamentId/register'
+    | '/tournaments/$tournamentId/registrations'
     | '/teams/$slug/'
     | '/tournaments/$tournamentId/'
     | '/view/$tournamentId/'
+    | '/tournaments/$tournamentId/registration/$registrationId'
     | '/tournaments/$tournamentId/stages/new'
     | '/tournaments/$tournamentId/stages/'
     | '/view/$tournamentId/$stageId/'
@@ -420,9 +446,11 @@ export interface RootRouteChildren {
   TournamentsTournamentIdEditRoute: typeof TournamentsTournamentIdEditRoute
   TournamentsTournamentIdFieldRolesRoute: typeof TournamentsTournamentIdFieldRolesRoute
   TournamentsTournamentIdRegisterRoute: typeof TournamentsTournamentIdRegisterRoute
+  TournamentsTournamentIdRegistrationsRoute: typeof TournamentsTournamentIdRegistrationsRoute
   TeamsSlugIndexRoute: typeof TeamsSlugIndexRoute
   TournamentsTournamentIdIndexRoute: typeof TournamentsTournamentIdIndexRoute
   ViewTournamentIdIndexRoute: typeof ViewTournamentIdIndexRoute
+  TournamentsTournamentIdRegistrationRegistrationIdRoute: typeof TournamentsTournamentIdRegistrationRegistrationIdRoute
   TournamentsTournamentIdStagesNewRoute: typeof TournamentsTournamentIdStagesNewRoute
   TournamentsTournamentIdStagesIndexRoute: typeof TournamentsTournamentIdStagesIndexRoute
   ViewTournamentIdStageIdIndexRoute: typeof ViewTournamentIdStageIdIndexRoute
@@ -579,6 +607,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TeamsSlugIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/tournaments/$tournamentId/registrations': {
+      id: '/tournaments/$tournamentId/registrations'
+      path: '/tournaments/$tournamentId/registrations'
+      fullPath: '/tournaments/$tournamentId/registrations'
+      preLoaderRoute: typeof TournamentsTournamentIdRegistrationsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/tournaments/$tournamentId/register': {
       id: '/tournaments/$tournamentId/register'
       path: '/tournaments/$tournamentId/register'
@@ -628,6 +663,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TournamentsTournamentIdStagesNewRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/tournaments/$tournamentId/registration/$registrationId': {
+      id: '/tournaments/$tournamentId/registration/$registrationId'
+      path: '/tournaments/$tournamentId/registration/$registrationId'
+      fullPath: '/tournaments/$tournamentId/registration/$registrationId'
+      preLoaderRoute: typeof TournamentsTournamentIdRegistrationRegistrationIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/tournaments/$tournamentId/stages/$stageId/live': {
       id: '/tournaments/$tournamentId/stages/$stageId/live'
       path: '/tournaments/$tournamentId/stages/$stageId/live'
@@ -669,9 +711,13 @@ const rootRouteChildren: RootRouteChildren = {
   TournamentsTournamentIdFieldRolesRoute:
     TournamentsTournamentIdFieldRolesRoute,
   TournamentsTournamentIdRegisterRoute: TournamentsTournamentIdRegisterRoute,
+  TournamentsTournamentIdRegistrationsRoute:
+    TournamentsTournamentIdRegistrationsRoute,
   TeamsSlugIndexRoute: TeamsSlugIndexRoute,
   TournamentsTournamentIdIndexRoute: TournamentsTournamentIdIndexRoute,
   ViewTournamentIdIndexRoute: ViewTournamentIdIndexRoute,
+  TournamentsTournamentIdRegistrationRegistrationIdRoute:
+    TournamentsTournamentIdRegistrationRegistrationIdRoute,
   TournamentsTournamentIdStagesNewRoute: TournamentsTournamentIdStagesNewRoute,
   TournamentsTournamentIdStagesIndexRoute:
     TournamentsTournamentIdStagesIndexRoute,

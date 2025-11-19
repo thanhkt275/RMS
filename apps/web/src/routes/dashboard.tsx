@@ -27,6 +27,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { authClient } from "@/lib/auth-client";
+import { type AccessControlUser, isAdminUser } from "@/utils/access-control";
 import { formatDate } from "@/utils/date";
 import {
   getTournamentStatusMeta,
@@ -116,6 +117,13 @@ export const Route = createFileRoute("/dashboard")({
     if (!session.data) {
       redirect({
         to: "/sign-in",
+        throw: true,
+      });
+    }
+    const user = session.data.user as AccessControlUser | undefined;
+    if (!isAdminUser(user)) {
+      redirect({
+        to: "/",
         throw: true,
       });
     }

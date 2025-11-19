@@ -7,6 +7,7 @@ const TOURNAMENT_STAGE_TYPES = [
 
 const MATCH_STATUSES = [
   "SCHEDULED",
+  "READY",
   "IN_PROGRESS",
   "COMPLETED",
   "CANCELED",
@@ -71,6 +72,7 @@ const STAGE_TYPE_META: Record<
 
 const MATCH_STATUS_LABELS: Record<MatchStatus, string> = {
   SCHEDULED: "Scheduled",
+  READY: "Ready",
   IN_PROGRESS: "In progress",
   COMPLETED: "Completed",
   CANCELED: "Canceled",

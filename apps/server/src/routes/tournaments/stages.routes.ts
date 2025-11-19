@@ -75,7 +75,7 @@ stagesRoute.get("/:tournamentId/stages", async (c: Context) => {
 
     // Fetch matches and rankings for each stage
     const stagesWithDetails = await Promise.all(
-      stages.map(async (stage: typeof stages[0]) => {
+      stages.map(async (stage: (typeof stages)[0]) => {
         const [matches, rankings] = await Promise.all([
           (db as AppDB).query.tournamentMatches.findMany({
             where: eq(tournamentMatches.stageId, stage.id),
@@ -97,10 +97,13 @@ stagesRoute.get("/:tournamentId/stages", async (c: Context) => {
         return {
           ...baseStage,
           fieldCount: tournament.fieldCount ?? 1,
-          matches: matches.map((match: typeof matches[0]) => ({
+          matches: matches.map((match: (typeof matches)[0]) => ({
             id: match.id,
             round: match.round,
             status: match.status,
+            matchType: match.matchType,
+            format: match.format,
+            robotStatus: match.robotStatus,
             scheduledAt: match.scheduledAt?.toISOString() ?? null,
             home: {
               id: match.homeTeamId,
@@ -122,7 +125,7 @@ stagesRoute.get("/:tournamentId/stages", async (c: Context) => {
             },
             metadata: match.metadata ? JSON.parse(match.metadata) : null,
           })),
-          rankings: rankings.map((ranking: typeof rankings[0]) => ({
+          rankings: rankings.map((ranking: (typeof rankings)[0]) => ({
             teamId: ranking.organizationId,
             name: ranking.organization.name,
             slug: ranking.organization.slug,
@@ -356,7 +359,10 @@ stagesRoute.post(
       const { tournamentId, stageId } = c.req.param();
 
       if (typeof tournamentId !== "string" || typeof stageId !== "string") {
-        return c.json({ error: "Tournament ID and Stage ID are required" }, 400);
+        return c.json(
+          { error: "Tournament ID and Stage ID are required" },
+          400
+        );
       }
 
       const { teamIds } = await c.req.json();
@@ -405,7 +411,10 @@ stagesRoute.post(
       const { tournamentId, stageId } = c.req.param();
 
       if (typeof tournamentId !== "string" || typeof stageId !== "string") {
-        return c.json({ error: "Tournament ID and Stage ID are required" }, 400);
+        return c.json(
+          { error: "Tournament ID and Stage ID are required" },
+          400
+        );
       }
 
       const tournament = await getTournamentByIdentifier(tournamentId);
@@ -462,35 +471,39 @@ stagesRoute.post(
         return c.json({ error: "Unsupported match format" }, 400);
       }
 
-      await db.transaction(async (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
-        // Delete existing matches for the stage
-        await tx
-          .delete(tournamentMatches)
-          .where(
-            and(
-              eq(tournamentMatches.tournamentId, tournament.id),
-              eq(tournamentMatches.stageId, stageId)
-            )
-          );
+      await db.transaction(
+        async (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
+          // Delete existing matches for the stage
+          await tx
+            .delete(tournamentMatches)
+            .where(
+              and(
+                eq(tournamentMatches.tournamentId, tournament.id),
+                eq(tournamentMatches.stageId, stageId)
+              )
+            );
 
-        // Insert new matches
-        if (generatedMatches.length > 0) {
-          await tx.insert(tournamentMatches).values(
-            generatedMatches.map((match: typeof generatedMatches[0]) => ({
-              id: match.id,
-              tournamentId: tournament.id,
-              stageId,
-              round: match.round,
-              status: match.status || "SCHEDULED", // Use status from metadata or default
-              homeTeamId: match.homeTeamId,
-              awayTeamId: match.awayTeamId,
-              homePlaceholder: match.homePlaceholder,
-              awayPlaceholder: match.awayPlaceholder,
-              metadata: JSON.stringify(match.metadata),
-            }))
-          );
+          // Insert new matches
+          if (generatedMatches.length > 0) {
+            await tx.insert(tournamentMatches).values(
+              generatedMatches.map((match: (typeof generatedMatches)[0]) => ({
+                id: match.id,
+                tournamentId: tournament.id,
+                stageId,
+                round: match.round,
+                status: match.status || "SCHEDULED", // Use status from metadata or default
+                matchType: match.matchType,
+                format: match.format,
+                homeTeamId: match.homeTeamId,
+                awayTeamId: match.awayTeamId,
+                homePlaceholder: match.homePlaceholder,
+                awayPlaceholder: match.awayPlaceholder,
+                metadata: JSON.stringify(match.metadata),
+              }))
+            );
+          }
         }
-      });
+      );
 
       const updatedStage = await (db as AppDB).query.tournamentStages.findFirst(
         {
@@ -600,7 +613,10 @@ stagesRoute.post(
       const { tournamentId, stageId } = c.req.param();
 
       if (typeof tournamentId !== "string" || typeof stageId !== "string") {
-        return c.json({ error: "Tournament ID and Stage ID are required" }, 400);
+        return c.json(
+          { error: "Tournament ID and Stage ID are required" },
+          400
+        );
       }
 
       const tournament = await getTournamentByIdentifier(tournamentId);
@@ -622,14 +638,16 @@ stagesRoute.post(
       const warnings: string[] = [];
       await ensureStageIsCompletable(stage, warnings);
 
-      await (db as AppDB).transaction(async (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
-        await tx
-          .update(tournamentStages)
-          .set({ status: "COMPLETED", completedAt: new Date() })
-          .where(eq(tournamentStages.id, stageId));
+      await (db as AppDB).transaction(
+        async (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
+          await tx
+            .update(tournamentStages)
+            .set({ status: "COMPLETED", completedAt: new Date() })
+            .where(eq(tournamentStages.id, stageId));
 
-        await recalculateStageRankings(tx, stage.id);
-      });
+          await recalculateStageRankings(tx, stage.id);
+        }
+      );
 
       const updatedStage = await (db as AppDB).query.tournamentStages.findFirst(
         {
