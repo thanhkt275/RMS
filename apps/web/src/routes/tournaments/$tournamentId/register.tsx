@@ -1,11 +1,16 @@
 import { useForm } from "@tanstack/react-form";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import {
+  type UseQueryResult,
+  useMutation,
+  useQuery,
+} from "@tanstack/react-query";
 import {
   createFileRoute,
   Link,
   redirect,
   useNavigate,
 } from "@tanstack/react-router";
+import type { ReactNode } from "react";
 import { toast } from "sonner";
 import z from "zod";
 import { FieldErrors, FormField } from "@/components/form-field";
@@ -19,16 +24,22 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { authClient } from "@/lib/auth-client";
+import type { RegistrationStep } from "@/types/registration";
 import { formatDateTime } from "@/utils/date";
 import { queryClient } from "@/utils/query-client";
+import { getStepTypeLabel } from "@/utils/registrations";
 import { getTournamentStatusMeta } from "@/utils/tournaments";
 
 const registerSchema = z.object({
   organizationId: z.string().min(1, "Select a team"),
   notes: z.string().max(1000).optional().default(""),
+  consentAccepted: z.boolean().refine((value) => value === true, {
+    message: "You must accept the consent form to continue.",
+  }),
 });
 
 type TournamentSummary = {
@@ -46,6 +57,18 @@ type UserTeam = {
   name: string;
   slug: string;
   role?: string | null;
+};
+
+type RegistrationStartResponse = {
+  registration: {
+    id: string;
+    status: string;
+    organizationId: string;
+  };
+};
+
+type RegistrationStepsResponse = {
+  steps: RegistrationStep[];
 };
 
 export const Route = createFileRoute("/tournaments/$tournamentId/register")({
@@ -92,7 +115,27 @@ function RegisterTeamPage() {
     },
   });
 
-  const registerTeam = useMutation({
+  const stepsQuery = useQuery<{ steps: RegistrationStep[] }>({
+    queryKey: ["tournament", tournamentId, "registration-steps"],
+    queryFn: async () => {
+      const response = await fetch(
+        `${import.meta.env.VITE_SERVER_URL}/api/tournaments/${tournamentId}/registration/steps`,
+        {
+          credentials: "include",
+        }
+      );
+      if (!response.ok) {
+        throw new Error("Unable to load registration steps");
+      }
+      return response.json() as Promise<{ steps: RegistrationStep[] }>;
+    },
+  });
+
+  const registerTeam = useMutation<
+    RegistrationStartResponse,
+    Error,
+    Record<string, unknown>
+  >({
     mutationFn: async (payload: Record<string, unknown>) => {
       const response = await fetch(
         `${import.meta.env.VITE_SERVER_URL}/api/tournaments/${tournamentId}/register`,
@@ -109,9 +152,9 @@ function RegisterTeamPage() {
         const error = await response.json().catch(() => ({}));
         throw new Error(error.error || "Unable to register team");
       }
-      return response.json() as Promise<{ success: boolean }>;
+      return response.json() as Promise<RegistrationStartResponse>;
     },
-    onSuccess: async () => {
+    onSuccess: async (data) => {
       toast.success("Team registered successfully");
       await Promise.all([
         queryClient.invalidateQueries({
@@ -120,8 +163,11 @@ function RegisterTeamPage() {
         queryClient.invalidateQueries({ queryKey: ["tournaments"] }),
       ]);
       await navigate({
-        to: "/tournaments/$tournamentId",
-        params: { tournamentId },
+        to: "/tournaments/$tournamentId/registration/$registrationId",
+        params: {
+          tournamentId,
+          registrationId: data.registration.id,
+        },
       });
     },
     onError: (error) => {
@@ -135,6 +181,7 @@ function RegisterTeamPage() {
     defaultValues: {
       organizationId: "",
       notes: "",
+      consentAccepted: false,
     },
     onSubmit: async ({ value }) => {
       const result = registerSchema.safeParse(value);
@@ -147,6 +194,7 @@ function RegisterTeamPage() {
       await registerTeam.mutateAsync({
         organizationId: result.data.organizationId,
         notes: result.data.notes?.trim() || undefined,
+        consentAccepted: result.data.consentAccepted,
       });
     },
   });
@@ -245,6 +293,8 @@ function RegisterTeamPage() {
         </Card>
       )}
 
+      <RegistrationChecklistCard query={stepsQuery} />
+
       <Card>
         <CardHeader>
           <CardTitle>Registration form</CardTitle>
@@ -313,6 +363,38 @@ function RegisterTeamPage() {
               )}
             </form.Field>
 
+            <form.Field name="consentAccepted">
+              {(field) => (
+                <FormField
+                  description="You must confirm that you agree to the tournament policies."
+                  htmlFor={field.name}
+                  label="Consent"
+                  required
+                >
+                  <label
+                    className="flex items-start gap-3 text-sm"
+                    htmlFor={field.name}
+                  >
+                    <Checkbox
+                      checked={field.state.value}
+                      disabled={registerTeam.isPending}
+                      id={field.name}
+                      onBlur={field.handleBlur}
+                      onCheckedChange={(checked) =>
+                        field.handleChange(checked === true)
+                      }
+                    />
+                    <span className="leading-relaxed">
+                      I confirm that our organization has reviewed the
+                      registration policies and agrees to follow the event
+                      rules.
+                    </span>
+                  </label>
+                  <FieldErrors errors={field.state.meta.errors} />
+                </FormField>
+              )}
+            </form.Field>
+
             <div className="flex items-center justify-between">
               <p className="text-muted-foreground text-sm">
                 Need to update your team?{" "}
@@ -330,7 +412,11 @@ function RegisterTeamPage() {
                 </Link>
               </p>
               <Button
-                disabled={!hasTeams || registerTeam.isPending}
+                disabled={
+                  !hasTeams ||
+                  registerTeam.isPending ||
+                  !form.state.values.consentAccepted
+                }
                 type="submit"
               >
                 {registerTeam.isPending ? "Submitting..." : "Register team"}
@@ -340,5 +426,64 @@ function RegisterTeamPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+type RegistrationChecklistCardProps = {
+  query: UseQueryResult<RegistrationStepsResponse>;
+};
+
+function RegistrationChecklistCard({ query }: RegistrationChecklistCardProps) {
+  let checklistContent: ReactNode;
+  if (query.isPending) {
+    checklistContent = (
+      <p className="text-muted-foreground text-sm">Loading checklist...</p>
+    );
+  } else if (query.error) {
+    checklistContent = (
+      <p className="text-destructive text-sm">
+        Unable to load the checklist right now.
+      </p>
+    );
+  } else if (query.data?.steps.length) {
+    checklistContent = (
+      <ul className="space-y-3">
+        {query.data.steps.map((step) => (
+          <li
+            className="flex items-center justify-between rounded-lg border px-4 py-3"
+            key={step.id}
+          >
+            <div>
+              <p className="font-medium">{step.title}</p>
+              <p className="text-muted-foreground text-sm">
+                {getStepTypeLabel(step.stepType)}
+                {step.isRequired ? " • Required" : " • Optional"}
+              </p>
+            </div>
+            <Badge variant={step.isRequired ? "secondary" : "outline"}>
+              {step.stepOrder}. {step.stepType.replace("_", " ")}
+            </Badge>
+          </li>
+        ))}
+      </ul>
+    );
+  } else {
+    checklistContent = (
+      <p className="text-muted-foreground text-sm">
+        This tournament has not published additional registration steps.
+      </p>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Registration checklist</CardTitle>
+        <CardDescription>
+          Review the required tasks before starting your submission.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>{checklistContent}</CardContent>
+    </Card>
   );
 }

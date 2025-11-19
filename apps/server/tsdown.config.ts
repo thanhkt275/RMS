@@ -8,8 +8,8 @@ export default defineConfig({
   noExternal: [/@rms-modern\/.*/],
   external: [
     "@libsql/linux-x64-musl",
-    "@libsql/darwin-arm64", 
+    "@libsql/darwin-arm64",
     "@libsql/darwin-x64",
-    "bun"
+    "bun",
   ],
 });

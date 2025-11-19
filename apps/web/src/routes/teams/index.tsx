@@ -16,6 +16,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { authClient } from "@/lib/auth-client";
+import { cn } from "@/lib/utils";
 import { formatStatus } from "@/utils/teams";
 
 type SortField = "createdAt" | "name" | "status" | "teamNumber";
@@ -438,34 +439,59 @@ function TeamsRoute() {
 
 function TeamCardGrid({ team }: { team: TeamListItem }) {
   const statusMeta = formatStatus(team.status);
+  const cardClass = cn(
+    "h-full",
+    "transition-shadow",
+    "rounded-xl",
+    "border",
+    "bg-card",
+    "ring-1",
+    "ring-border",
+    team.isMember
+      ? "border-primary bg-primary/5 shadow-md ring-primary/30"
+      : "hover:shadow-md"
+  );
 
   return (
-    <Link params={{ slug: team.slug }} search={{}} to="/teams/$slug">
-      <Card className="h-full cursor-pointer transition-shadow hover:shadow-md">
-        <CardContent className="flex flex-col items-center gap-3 p-4 text-center">
-          <Avatar className="h-12 w-12">
-            <AvatarImage alt={team.name} src={team.logo} />
-            <AvatarFallback>
-              {team.name.slice(0, 2).toUpperCase()}
-            </AvatarFallback>
-          </Avatar>
-          <div className="space-y-1">
-            <h3 className="font-semibold text-sm leading-tight">{team.name}</h3>
-            {team.teamNumber && (
-              <p className="text-muted-foreground text-xs">
-                #{team.teamNumber}
-              </p>
-            )}
-            {team.location && (
-              <p className="text-muted-foreground text-xs">{team.location}</p>
-            )}
+    <Card className={cardClass}>
+      <CardContent className="flex flex-col items-center gap-3 p-4 text-center">
+        <Avatar className="h-12 w-12">
+          <AvatarImage alt={team.name} src={team.logo} />
+          <AvatarFallback>{team.name.slice(0, 2).toUpperCase()}</AvatarFallback>
+        </Avatar>
+        <div className="space-y-1">
+          <Link
+            className="font-semibold text-foreground text-sm leading-tight hover:underline"
+            params={{ slug: team.slug }}
+            search={{}}
+            to="/teams/$slug"
+          >
+            {team.name}
+          </Link>
+          {team.teamNumber && (
+            <p className="text-muted-foreground text-xs">#{team.teamNumber}</p>
+          )}
+          {team.location && (
+            <p className="text-muted-foreground text-xs">{team.location}</p>
+          )}
+        </div>
+        <Badge className="text-xs" variant={statusMeta.badgeVariant}>
+          {statusMeta.label}
+        </Badge>
+        {team.isMember && (
+          <div className="flex w-full flex-col gap-2 text-sm">
+            <Badge className="text-xs" variant="secondary">
+              Your team
+            </Badge>
+            <Button asChild className="w-full" size="sm" variant="secondary">
+              <Link params={{ slug: team.slug }} search={{}} to="/teams/$slug">
+                View my team
+              </Link>
+            </Button>
           </div>
-          <Badge className="text-xs" variant={statusMeta.badgeVariant}>
-            {statusMeta.label}
-          </Badge>
-        </CardContent>
-      </Card>
-    </Link>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -474,9 +500,13 @@ function TeamTableRow({ team }: { team: TeamListItem }) {
   const joinDate = team.memberJoinedAt
     ? new Date(team.memberJoinedAt)
     : new Date(team.createdAt);
+  const rowHighlight = cn(
+    "border-b hover:bg-muted/50",
+    team.isMember && "bg-primary/5"
+  );
 
   return (
-    <tr className="border-b hover:bg-muted/50">
+    <tr className={rowHighlight}>
       <td className="px-4 py-3">
         <Avatar className="h-8 w-8">
           <AvatarImage alt={team.name} src={team.logo} />
@@ -485,14 +515,21 @@ function TeamTableRow({ team }: { team: TeamListItem }) {
       </td>
       <td className="px-4 py-3 text-sm">{team.teamNumber || "N/A"}</td>
       <td className="px-4 py-3 font-medium text-sm">
-        <Link
-          className="text-foreground hover:underline"
-          params={{ slug: team.slug }}
-          search={{}}
-          to="/teams/$slug"
-        >
-          {team.name}
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link
+            className="text-foreground hover:underline"
+            params={{ slug: team.slug }}
+            search={{}}
+            to="/teams/$slug"
+          >
+            {team.name}
+          </Link>
+          {team.isMember && (
+            <Badge className="text-xs" variant="secondary">
+              Your team
+            </Badge>
+          )}
+        </div>
       </td>
       <td className="px-4 py-3 text-muted-foreground text-sm">
         {team.location || "N/A"}
@@ -503,7 +540,21 @@ function TeamTableRow({ team }: { team: TeamListItem }) {
       <td className="px-4 py-3 text-muted-foreground text-sm">N/A</td>
       <td className="px-4 py-3 text-muted-foreground text-sm">N/A</td>
       <td className="px-4 py-3 text-sm">
-        <Badge variant={statusMeta.badgeVariant}>{statusMeta.label}</Badge>
+        <div className="flex flex-col gap-2">
+          <Badge variant={statusMeta.badgeVariant}>{statusMeta.label}</Badge>
+          {team.isMember && (
+            <Button
+              asChild
+              className="w-fit border-muted text-xs"
+              size="xs"
+              variant="outline"
+            >
+              <Link params={{ slug: team.slug }} search={{}} to="/teams/$slug">
+                View my team
+              </Link>
+            </Button>
+          )}
+        </div>
       </td>
     </tr>
   );

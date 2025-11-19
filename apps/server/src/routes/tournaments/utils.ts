@@ -472,6 +472,8 @@ export function generateRoundRobinMatches(
           awayPlaceholder: null,
           metadata: { format: "ROUND_ROBIN" },
           status: "SCHEDULED", // Default status
+          matchType: "NORMAL",
+          format: "ROUND_ROBIN",
         });
       }
     }
@@ -496,6 +498,10 @@ export function generateDoubleEliminationMatches(teamIds: string[]): {
 } {
   const generatedMatches: StageMatchSeed[] = [];
   const matchDependencies: StageMatchDependency[] = [];
+  const baseMatchProps = {
+    matchType: "NORMAL" as const,
+    format: "DOUBLE_ELIMINATION" as const,
+  };
 
   if (teamIds.length < 2) {
     return { generatedMatches, matchDependencies };
@@ -524,6 +530,7 @@ export function generateDoubleEliminationMatches(teamIds: string[]): {
       awayPlaceholder: null,
       metadata: { format: "DOUBLE_ELIMINATION" } as MatchMetadata,
       status: "SCHEDULED",
+      ...baseMatchProps,
     });
   }
 
@@ -566,6 +573,7 @@ export function generateDoubleEliminationMatches(teamIds: string[]): {
     awayPlaceholder: `Winner of ${label1}`,
     metadata: { format: "DOUBLE_ELIMINATION" },
     status: "SCHEDULED", // Default status
+    ...baseMatchProps,
   });
 
   if (match0) {
@@ -599,6 +607,7 @@ export function generateDoubleEliminationMatches(teamIds: string[]): {
     awayPlaceholder: `Winner of ${label3}`,
     metadata: { format: "DOUBLE_ELIMINATION" },
     status: "SCHEDULED", // Default status
+    ...baseMatchProps,
   });
 
   if (match2) {
@@ -631,6 +640,7 @@ export function generateDoubleEliminationMatches(teamIds: string[]): {
     awayPlaceholder: `Winner of ${labelWS2}`,
     metadata: { format: "DOUBLE_ELIMINATION" },
     status: "SCHEDULED", // Default status
+    ...baseMatchProps,
   });
   matchDependencies.push({
     targetMatchId: winnersFinal,
@@ -655,6 +665,7 @@ export function generateDoubleEliminationMatches(teamIds: string[]): {
     awayPlaceholder: `Loser of ${label1}`,
     metadata: { format: "DOUBLE_ELIMINATION" },
     status: "SCHEDULED", // Default status
+    ...baseMatchProps,
   });
 
   if (match0) {
@@ -687,6 +698,7 @@ export function generateDoubleEliminationMatches(teamIds: string[]): {
     awayPlaceholder: `Winner of ${labelLR1}`,
     metadata: { format: "DOUBLE_ELIMINATION" },
     status: "SCHEDULED", // Default status
+    ...baseMatchProps,
   });
   matchDependencies.push({
     targetMatchId: losersFinal,
@@ -713,6 +725,7 @@ export function generateDoubleEliminationMatches(teamIds: string[]): {
     awayPlaceholder: `Winner of ${labelLF}`,
     metadata: { format: "DOUBLE_ELIMINATION" },
     status: "SCHEDULED", // Default status
+    ...baseMatchProps,
   });
   matchDependencies.push({
     targetMatchId: grandFinal,

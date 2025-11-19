@@ -14,14 +14,36 @@ const filesRoute = new Hono();
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 const ALLOWED_MIME_TYPES = [
+  // Images
   "image/jpeg",
   "image/jpg",
   "image/png",
   "image/gif",
   "image/webp",
+  "image/svg+xml",
+  // PDF
   "application/pdf",
+  // Word documents
   "application/msword",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  // Excel spreadsheets
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  // PowerPoint presentations
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  // Text files
+  "text/plain",
+  "text/csv",
+  // Archives
+  "application/zip",
+  "application/x-zip-compressed",
+  "application/x-rar-compressed",
+  "application/x-7z-compressed",
+  // Other common formats
+  "application/json",
+  "application/xml",
+  "text/xml",
 ];
 
 // Determine if we're using local storage or cloud storage
@@ -96,7 +118,7 @@ filesRoute.post("/upload", async (c: Context) => {
   if (!ALLOWED_MIME_TYPES.includes(file.type)) {
     throw new HTTPException(400, {
       message:
-        "File type not supported. Please upload an image, PDF, or document.",
+        "File type not supported. Allowed types: images, PDF, Word, Excel, PowerPoint, text files, CSV, and archives.",
     });
   }
 
@@ -133,7 +155,15 @@ filesRoute.post("/upload", async (c: Context) => {
       file.type === "application/pdf" ||
       file.type === "application/msword" ||
       file.type ===
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+      file.type === "application/vnd.ms-excel" ||
+      file.type ===
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+      file.type === "application/vnd.ms-powerpoint" ||
+      file.type ===
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation" ||
+      file.type === "text/plain" ||
+      file.type === "text/csv"
     ) {
       category = "DOCUMENT";
     }
@@ -311,9 +341,21 @@ if (USE_LOCAL_STORAGE) {
         png: "image/png",
         gif: "image/gif",
         webp: "image/webp",
+        svg: "image/svg+xml",
         pdf: "application/pdf",
         doc: "application/msword",
         docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        xls: "application/vnd.ms-excel",
+        xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ppt: "application/vnd.ms-powerpoint",
+        pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        txt: "text/plain",
+        csv: "text/csv",
+        zip: "application/zip",
+        rar: "application/x-rar-compressed",
+        "7z": "application/x-7z-compressed",
+        json: "application/json",
+        xml: "application/xml",
       };
 
       const mimeType = mimeTypes[extension] || "application/octet-stream";

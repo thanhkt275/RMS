@@ -18,6 +18,7 @@ const {
   tournamentStages,
   tournamentStageTeams,
   tournaments,
+  tournamentRegistrationSteps,
 } = await import("../schema/organization");
 const { user, orgRoles } = await import("../schema/auth");
 
@@ -167,12 +168,59 @@ async function seed() {
       scoreProfileId: defaultScoreProfileId,
     });
 
+    console.log("Creating registration steps...");
+    await tx.insert(tournamentRegistrationSteps).values([
+      {
+        id: "step-basic-info",
+        tournamentId,
+        title: "Team information",
+        description: "Share your organization contacts and pit details.",
+        stepType: "INFO",
+        isRequired: true,
+        stepOrder: 1,
+        metadata: JSON.stringify({
+          inputLabel: "Organization overview",
+          helperText:
+            "Include the primary contact, pit requirements, and robot summary.",
+          maxLength: 1200,
+        }),
+      },
+      {
+        id: "step-safety-plan",
+        tournamentId,
+        title: "Safety documentation",
+        description: "Upload your latest safety plan PDF.",
+        stepType: "FILE_UPLOAD",
+        isRequired: true,
+        stepOrder: 2,
+        metadata: JSON.stringify({
+          acceptedTypes: ["application/pdf"],
+          helperText: "PDF only. Maximum size 10MB.",
+          maxFiles: 1,
+        }),
+      },
+      {
+        id: "step-consent",
+        tournamentId,
+        title: "Consent & policies",
+        description: "Confirm that your team agrees to tournament policies.",
+        stepType: "CONSENT",
+        isRequired: true,
+        stepOrder: 3,
+        metadata: JSON.stringify({
+          statement:
+            "I confirm that our team has reviewed the event policies and waivers.",
+        }),
+      },
+    ]);
+
     // Register all teams for the tournament
     const participations = teams.map((team, index) => ({
       id: `participation-${team.id}`,
       tournamentId,
       organizationId: team.id,
       seed: index + 1,
+      status: "APPROVED" as const,
     }));
 
     console.log("Registering teams for tournament...");
