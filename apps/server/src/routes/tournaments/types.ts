@@ -1,6 +1,9 @@
 import type * as OrganizationSchema from "@rms-modern/db/schema/organization";
 import type {
+  MatchFormat,
+  MatchRobotStatus,
   MatchStatus,
+  MatchType,
   TournamentFieldRole,
   TournamentStageStatus,
   TournamentStageType,
@@ -21,7 +24,7 @@ export type StageConfiguration = {
   format?: "ROUND_ROBIN" | "DOUBLE_ELIMINATION";
   doubleRoundRobin?: boolean;
   // Add other stage-specific configuration properties here
-  [key: string]: any;
+  [key: string]: unknown;
 };
 
 export type MatchMetadataSource = {
@@ -86,6 +89,8 @@ export type StageMatchSeed = {
   awayPlaceholder: string | null;
   metadata: MatchMetadata;
   status: MatchStatus;
+  matchType: MatchType;
+  format: MatchFormat | null;
 };
 
 export type StageGenerationResult = {
@@ -139,6 +144,8 @@ export type StageMatchRow = {
   id: string;
   round: string | null;
   status: MatchStatus;
+  matchType: MatchType;
+  format: MatchFormat | null;
   scheduledAt: Date | null;
   homeTeamId: string | null;
   awayTeamId: string | null;
@@ -147,6 +154,7 @@ export type StageMatchRow = {
   homeScore: number | null;
   awayScore: number | null;
   metadata: string | null;
+  robotStatus: MatchRobotStatus | null;
   homeTeamName: string | null;
   homeTeamSlug: string | null;
   homeTeamLogo: string | null;
@@ -189,6 +197,9 @@ export type StageResponseMatch = {
   id: string;
   round: string | null;
   status: MatchStatus;
+  matchType: MatchType;
+  format: MatchFormat | null;
+  robotStatus: MatchRobotStatus | null;
   scheduledAt: string | null;
   home: {
     id: string | null;

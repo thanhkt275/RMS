@@ -1,12 +1,23 @@
 import {
+  type MatchFormat,
+  type MatchRobotStatus,
   type MatchStatus,
+  type MatchType,
+  matchFormats,
+  matchRobotStatuses,
   matchStatuses,
+  matchTypes,
   type TournamentFieldRole,
+  type TournamentRegistrationStatus,
+  type TournamentRegistrationStepType,
   type TournamentResourceType,
   type TournamentStageStatus,
   type TournamentStageType,
   type TournamentStatus,
   tournamentFieldRoles,
+  tournamentRegistrationStatuses,
+  tournamentRegistrationStepTypes,
+  tournamentRegistrationSubmissionStatuses,
   tournamentResourceTypes,
   tournamentStageStatuses,
   tournamentStageTypes,
@@ -17,6 +28,21 @@ import { z } from "zod";
 export const tournamentStatusSchema = z.enum([...tournamentStatuses] as [
   TournamentStatus,
   ...TournamentStatus[],
+]);
+
+export const tournamentRegistrationStatusSchema = z.enum([
+  ...tournamentRegistrationStatuses,
+] as [TournamentRegistrationStatus, ...TournamentRegistrationStatus[]]);
+
+export const registrationStepTypeSchema = z.enum([
+  ...tournamentRegistrationStepTypes,
+] as [TournamentRegistrationStepType, ...TournamentRegistrationStepType[]]);
+
+export const registrationSubmissionStatusSchema = z.enum([
+  ...tournamentRegistrationSubmissionStatuses,
+] as [
+  (typeof tournamentRegistrationSubmissionStatuses)[number],
+  ...(typeof tournamentRegistrationSubmissionStatuses)[number][],
 ]);
 
 export const tournamentResourceTypeSchema = z.enum([
@@ -86,6 +112,82 @@ export const tournamentUpdateSchema = tournamentPayloadSchema.partial().extend({
 export const registrationSchema = z.object({
   organizationId: z.string().min(1),
   notes: z.string().max(2000).optional(),
+  consentAccepted: z.boolean().refine((value) => value === true, {
+    message: "You must accept the consent form to continue.",
+  }),
+});
+
+const infoMetadataSchema = z
+  .object({
+    inputLabel: z.string().max(120).optional(),
+    helperText: z.string().max(1000).optional(),
+    maxLength: z.number().int().min(100).max(5000).optional(),
+  })
+  .optional();
+
+const fileMetadataSchema = z
+  .object({
+    helperText: z.string().max(1000).optional(),
+    acceptedTypes: z.array(z.string().min(1)).max(10).optional(),
+    maxFiles: z.number().int().min(1).max(5).optional(),
+  })
+  .optional();
+
+const consentMetadataSchema = z
+  .object({
+    statement: z.string().min(10).max(2000),
+    helperText: z.string().max(1000).optional(),
+  })
+  .optional();
+
+const baseStepSchema = z.object({
+  title: z.string().min(3).max(180),
+  description: z.string().max(2000).optional(),
+  isRequired: z.boolean().optional().default(true),
+  stepOrder: z.number().int().min(1).optional(),
+});
+
+export const registrationStepPayloadSchema = z.discriminatedUnion("stepType", [
+  baseStepSchema.extend({
+    stepType: z.literal("INFO"),
+    metadata: infoMetadataSchema,
+  }),
+  baseStepSchema.extend({
+    stepType: z.literal("FILE_UPLOAD"),
+    metadata: fileMetadataSchema,
+  }),
+  baseStepSchema.extend({
+    stepType: z.literal("CONSENT"),
+    metadata: consentMetadataSchema,
+  }),
+] as const);
+
+export type RegistrationStepPayload = z.infer<
+  typeof registrationStepPayloadSchema
+>;
+
+export const registrationStepUpdateSchema = baseStepSchema.extend({
+  stepType: registrationStepTypeSchema.optional(),
+  metadata: z.union([
+    infoMetadataSchema.unwrap().optional(),
+    fileMetadataSchema.unwrap().optional(),
+    consentMetadataSchema.unwrap().optional(),
+  ]),
+});
+
+export const registrationSubmissionPayloadSchema = z.object({
+  responseText: z.string().min(3).max(4000).optional(),
+  fileId: z.string().min(1).optional(),
+  consentAccepted: z.boolean().optional(),
+});
+
+export const registrationSubmissionReviewSchema = z.object({
+  status: registrationSubmissionStatusSchema,
+  reviewNotes: z.string().max(2000).optional(),
+});
+
+export const registrationStatusUpdateSchema = z.object({
+  status: tournamentRegistrationStatusSchema,
 });
 
 export const stageStatusSchema = z.enum([...tournamentStageStatuses] as [
@@ -101,6 +203,21 @@ export const stageTypeSchema = z.enum([...tournamentStageTypes] as [
 export const matchStatusSchema = z.enum([...matchStatuses] as [
   MatchStatus,
   ...MatchStatus[],
+]);
+
+export const matchRobotStatusSchema = z.enum([...matchRobotStatuses] as [
+  MatchRobotStatus,
+  ...MatchRobotStatus[],
+]);
+
+export const matchTypeSchema = z.enum([...matchTypes] as [
+  MatchType,
+  ...MatchType[],
+]);
+
+export const matchFormatSchema = z.enum([...matchFormats] as [
+  MatchFormat,
+  ...MatchFormat[],
 ]);
 
 export const stagePayloadSchema = z.object({
@@ -143,9 +260,25 @@ export const matchUpdateSchema = z.object({
   homeTeamId: z.string().optional().nullable(), // Added
   awayTeamId: z.string().optional().nullable(), // Added
   metadata: z.record(z.string(), z.unknown()).optional().nullable(), // Added
+  robotStatus: matchRobotStatusSchema.optional().nullable(),
+  matchType: matchTypeSchema.optional(),
+  format: matchFormatSchema.optional().nullable(),
 });
 
 export type MatchUpdateInput = z.infer<typeof matchUpdateSchema>;
+
+const queuerManagedStatuses = [
+  "SCHEDULED",
+  "READY",
+  "CANCELED",
+] as const satisfies [MatchStatus, ...MatchStatus[]];
+
+export const matchQueuerUpdateSchema = z.object({
+  robotStatus: matchRobotStatusSchema,
+  status: z.enum(queuerManagedStatuses).optional(),
+});
+
+export type MatchQueuerUpdateInput = z.infer<typeof matchQueuerUpdateSchema>;
 
 const fieldRoleValueSchema = z.string().min(1).optional().nullable();
 
@@ -160,4 +293,9 @@ export const fieldRoleAssignmentSchema = z.object({
 
 export const fieldRoleUpdateSchema = z.object({
   assignments: z.array(fieldRoleAssignmentSchema).default([]),
+});
+
+export const reschedulMatchSchema = z.object({
+  scheduledAt: isoDateSchema,
+  reason: z.string().max(500).optional(),
 });

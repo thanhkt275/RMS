@@ -8,7 +8,7 @@ import authRoute from "./routes/auth";
 import { filesRoute } from "./routes/files";
 import { scoreProfilesRoute } from "./routes/score-profiles";
 import teamsRoute from "./routes/teams";
-import { tournamentsRoute } from "./routes/tournaments";
+import { tournamentsRoute } from "./routes/tournaments/index";
 
 type ServerVariables = {
   redis: RedisClient;

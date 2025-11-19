@@ -160,6 +160,14 @@ function TournamentDetailPage() {
                   Manage field roles
                 </Link>
               </Button>
+              <Button asChild variant="secondary">
+                <Link
+                  params={{ tournamentId: tournament.slug }}
+                  to="/tournaments/$tournamentId/registrations"
+                >
+                  Manage registration
+                </Link>
+              </Button>
               <Button asChild>
                 <Link
                   params={{ tournamentId: tournament.slug }}

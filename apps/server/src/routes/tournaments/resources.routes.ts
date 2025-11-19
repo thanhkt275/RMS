@@ -16,7 +16,9 @@ const resourcesRoute = new Hono();
 
 function ensureAdmin(
   session: Awaited<ReturnType<typeof auth.api.getSession>> | null
-): asserts session is NonNullable<Awaited<ReturnType<typeof auth.api.getSession>>> & {
+): asserts session is NonNullable<
+  Awaited<ReturnType<typeof auth.api.getSession>>
+> & {
   user: { role: string };
 } {
   if (!session) {

@@ -1,4 +1,4 @@
-import type { auth, type AuthUser } from "@rms-modern/auth";
+import type { AuthUser, auth } from "@rms-modern/auth";
 import {
   inferAdditionalFields,
   usernameClient,

@@ -4,7 +4,6 @@ import { type AppDB, db } from "@rms-modern/db";
 import { user } from "@rms-modern/db/schema/auth";
 import type { TournamentStatus } from "@rms-modern/db/schema/organization";
 import {
-  organizationMembers,
   tournamentParticipations,
   tournamentResources,
   tournamentStages,
@@ -20,7 +19,9 @@ const tournamentCoreRoute = new Hono();
 
 function ensureAdmin(
   session: Awaited<ReturnType<typeof auth.api.getSession>> | null
-): asserts session is NonNullable<Awaited<ReturnType<typeof auth.api.getSession>>> & {
+): asserts session is NonNullable<
+  Awaited<ReturnType<typeof auth.api.getSession>>
+> & {
   user: { role: string };
 } {
   if (!session) {
@@ -109,7 +110,7 @@ tournamentCoreRoute.get("/", async (c: Context) => {
     const totalItems = totalItemsResult[0]?.count ?? 0;
 
     return c.json({
-      items: items.map((item: typeof items[0]) => ({
+      items: items.map((item: (typeof items)[0]) => ({
         ...item,
         startDate: item.startDate?.toISOString() ?? null,
         endDate: item.endDate?.toISOString() ?? null,
@@ -193,14 +194,16 @@ tournamentCoreRoute.get("/admin/overview", async (c: Context) => {
         completed: completedTournaments[0]?.count ?? 0,
         totalRegistrations: totalRegistrations[0]?.count ?? 0,
       },
-      recentTournaments: recentTournaments.map((t: typeof recentTournaments[0]) => ({
-        id: t.id,
-        name: t.name,
-        status: t.status as TournamentStatus,
-        startDate: t.startDate?.toISOString() ?? null,
-        fieldCount: t.fieldCount ?? 1,
-        registeredTeams: Number(t.registeredTeams) ?? 0,
-      })),
+      recentTournaments: recentTournaments.map(
+        (t: (typeof recentTournaments)[0]) => ({
+          id: t.id,
+          name: t.name,
+          status: t.status as TournamentStatus,
+          startDate: t.startDate?.toISOString() ?? null,
+          fieldCount: t.fieldCount ?? 1,
+          registeredTeams: Number(t.registeredTeams) ?? 0,
+        })
+      ),
     });
   } catch (error) {
     console.error("Failed to fetch admin overview:", error);
@@ -356,27 +359,28 @@ tournamentCoreRoute.get("/:identifier", async (c: Context) => {
       endDate: tournament.endDate?.toISOString() ?? null,
       registrationDeadline:
         tournament.registrationDeadline?.toISOString() ?? null,
-      stages: stages.map((stage: typeof stages[0]) => ({
+      stages: stages.map((stage: (typeof stages)[0]) => ({
         id: stage.id,
         name: stage.name,
         type: stage.type,
         status: stage.status,
         order: stage.stageOrder,
       })),
-      participants: participations.map((p: typeof participations[0]) => ({
+      participants: participations.map((p: (typeof participations)[0]) => ({
         id: p.id,
         teamId: p.organizationId,
         teamName: p.organization.name,
         teamSlug: p.organization.slug,
         teamLogo: p.organization.logo,
         teamLocation: p.organization.location,
+        status: p.status,
         seed: p.seed,
         placement: p.placement,
         result: p.result,
         record: p.record,
         notes: p.notes,
       })),
-      resources: resources.map((r: typeof resources[0]) => ({
+      resources: resources.map((r: (typeof resources)[0]) => ({
         id: r.id,
         title: r.title,
         url: r.url,
@@ -442,79 +446,6 @@ tournamentCoreRoute.patch("/:identifier", async (c: Context) => {
       return c.json({ error: error.flatten() }, 422);
     }
     return c.json({ error: "Unable to update tournament" }, 500);
-  }
-});
-
-tournamentCoreRoute.post("/:identifier/register", async (c: Context) => {
-  try {
-    const session = await auth.api.getSession({ headers: c.req.raw.headers });
-    if (!session) {
-      return c.json({ error: "Unauthorized" }, 401);
-    }
-
-    const { identifier } = c.req.param();
-
-    if (!identifier) {
-      return c.json({ error: "Tournament identifier is required" }, 400);
-    }
-
-    const { teamId } = await c.req.json();
-
-    const tournament = await getTournamentByIdentifier(identifier);
-    if (!tournament) {
-      return c.json({ error: "Tournament not found" }, 404);
-    }
-
-    // Check if team exists and user is a member/mentor
-    const teamMembership = await (db as AppDB)
-      .select()
-      .from(organizationMembers)
-      .where(
-        and(
-          eq(organizationMembers.organizationId, teamId),
-          eq(organizationMembers.userId, session.user.id),
-          inArray(organizationMembers.role, ["TEAM_MENTOR", "TEAM_LEADER"])
-        )
-      )
-      .limit(1);
-
-    if (!teamMembership.length) {
-      return c.json(
-        { error: "Team not found or you don't have permission to register it" },
-        403
-      );
-    }
-
-    // Check if already registered
-    const existingRegistration = await (db as AppDB)
-      .select()
-      .from(tournamentParticipations)
-      .where(
-        and(
-          eq(tournamentParticipations.tournamentId, tournament.id),
-          eq(tournamentParticipations.organizationId, teamId)
-        )
-      )
-      .limit(1);
-
-    if (existingRegistration.length) {
-      return c.json(
-        { error: "Team already registered for this tournament" },
-        409
-      );
-    }
-
-    await (db as AppDB).insert(tournamentParticipations).values({
-      id: crypto.randomUUID(),
-      tournamentId: tournament.id,
-      organizationId: teamId,
-      registeredBy: session.user.id,
-    });
-
-    return c.json({ success: true }, 201);
-  } catch (error) {
-    console.error("Failed to register team for tournament:", error);
-    return c.json({ error: "Unable to register team" }, 500);
   }
 });
 

@@ -13,7 +13,7 @@ export function resolveRedisUrl(): string {
 
   try {
     parsedUrl = new URL(urlWithScheme);
-  } catch (error) {
+  } catch (_error) {
     throw new Error(`Invalid REDIS_URL value: ${urlWithScheme}`);
   }
 

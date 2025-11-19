@@ -424,6 +424,8 @@ teamsRoute.get("/:slug", async (c: Context) => {
         season: tournaments.season,
         placement: tournamentParticipations.placement,
         result: tournamentParticipations.result,
+        participationId: tournamentParticipations.id,
+        registrationStatus: tournamentParticipations.status,
       })
       .from(tournamentParticipations)
       .innerJoin(
@@ -524,6 +526,8 @@ teamsRoute.get("/:slug", async (c: Context) => {
         endDate: entry.endDate?.toISOString() ?? null,
         placement: entry.placement,
         result: entry.result,
+        registrationId: entry.participationId,
+        registrationStatus: entry.registrationStatus,
       })),
       matches,
       achievements: achievements.map((achievement) => ({

@@ -11,8 +11,8 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { AddMemberForm } from "@/components/add-member-form";
-import { AvatarUploadForm } from "@/components/avatar-upload-form";
 import Loader from "@/components/loader";
+import { TeamAvatarUpload } from "@/components/team-avatar-upload";
 import TeamMembersList from "@/components/team-members-list";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -26,6 +26,8 @@ import {
 } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { authClient } from "@/lib/auth-client";
+import type { RegistrationStatus } from "@/types/registration";
+import { getRegistrationStatusMeta } from "@/utils/registrations";
 import { formatRole, formatStatus } from "@/utils/teams";
 
 type TeamTournament = {
@@ -39,6 +41,8 @@ type TeamTournament = {
   endDate?: string | null;
   placement?: string | null;
   result?: string | null;
+  registrationId?: string;
+  registrationStatus?: RegistrationStatus;
 };
 
 type TeamMatch = {
@@ -66,6 +70,24 @@ type TeamAchievement = {
   awardedAt?: string | null;
   tournamentId?: string | null;
   tournamentName?: string | null;
+};
+
+const getRegistrationActionLabel = (status?: RegistrationStatus) => {
+  if (!status) {
+    return "Track registration";
+  }
+  switch (status) {
+    case "IN_PROGRESS":
+    case "REJECTED":
+      return "Continue registration";
+    case "SUBMITTED":
+    case "UNDER_REVIEW":
+      return "Track registration";
+    case "APPROVED":
+      return "View registration";
+    default:
+      return "Track registration";
+  }
 };
 
 type MatchBadgeVariant = "success" | "destructive" | "warning" | "secondary";
@@ -293,7 +315,7 @@ function TeamProfileLayout({
       {showAvatarForm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="w-full max-w-md">
-            <AvatarUploadForm
+            <TeamAvatarUpload
               currentAvatar={team.logo}
               onCancel={() => setShowAvatarForm(false)}
               onSuccess={() => {
@@ -612,7 +634,7 @@ function TeamMainContent({
 
       {/* Avatar Form */}
       {isMentor && showAvatarForm && (
-        <AvatarUploadForm
+        <TeamAvatarUpload
           currentAvatar={team.logo}
           onCancel={() => setShowAvatarForm(false)}
           onSuccess={() => setShowAvatarForm(false)}
@@ -832,28 +854,70 @@ function TournamentsTab({ team, isMentor }: TabProps) {
                 No tournaments recorded yet.
               </p>
             )}
-            {tournaments.map((tournament) => (
-              <div
-                className="flex flex-col gap-2 rounded-lg border p-4 sm:flex-row sm:items-center sm:justify-between"
-                key={tournament.id}
-              >
-                <div className="space-y-1">
-                  <p className="font-medium">{tournament.name}</p>
-                  <p className="text-muted-foreground text-sm">
-                    {formatRange(tournament.startDate, tournament.endDate)}
-                    {tournament.season ? ` • ${tournament.season}` : ""}
-                  </p>
-                  {tournament.location && (
-                    <p className="text-muted-foreground text-xs">
-                      {tournament.location}
+            {tournaments.map((tournament) => {
+              const showRegistrationBadge = Boolean(
+                tournament.registrationStatus &&
+                  tournament.registrationStatus !== "APPROVED"
+              );
+              const registrationStatusMeta = showRegistrationBadge
+                ? getRegistrationStatusMeta(tournament.registrationStatus)
+                : undefined;
+              const showRegistrationAction = Boolean(
+                tournament.registrationStatus &&
+                  tournament.registrationStatus !== "APPROVED" &&
+                  tournament.registrationId
+              );
+              const actionLabel = getRegistrationActionLabel(
+                tournament.registrationStatus
+              );
+
+              return (
+                <div
+                  className="flex flex-col gap-2 rounded-lg border p-4 sm:flex-row sm:items-center sm:justify-between"
+                  key={tournament.id}
+                >
+                  <div className="space-y-1">
+                    <p className="font-medium">{tournament.name}</p>
+                    <p className="text-muted-foreground text-sm">
+                      {formatRange(tournament.startDate, tournament.endDate)}
+                      {tournament.season ? ` • ${tournament.season}` : ""}
                     </p>
-                  )}
+                    {tournament.location && (
+                      <p className="text-muted-foreground text-xs">
+                        {tournament.location}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex flex-col items-start gap-2 sm:items-end">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {(tournament.placement || tournament.result) && (
+                        <Badge>
+                          {tournament.placement || tournament.result}
+                        </Badge>
+                      )}
+                      {showRegistrationBadge && registrationStatusMeta && (
+                        <Badge variant={registrationStatusMeta.badgeVariant}>
+                          {registrationStatusMeta.label}
+                        </Badge>
+                      )}
+                    </div>
+                    {showRegistrationAction && (
+                      <Button asChild size="sm" variant="secondary">
+                        <Link
+                          params={{
+                            tournamentId: tournament.slug,
+                            registrationId: tournament.registrationId,
+                          }}
+                          to="/tournaments/$tournamentId/registration/$registrationId"
+                        >
+                          {actionLabel}
+                        </Link>
+                      </Button>
+                    )}
+                  </div>
                 </div>
-                {(tournament.placement || tournament.result) && (
-                  <Badge>{tournament.placement || tournament.result}</Badge>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
           {isMentor && (
             <div className="mt-4 flex justify-center">
