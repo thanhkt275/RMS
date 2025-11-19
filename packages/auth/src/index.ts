@@ -17,6 +17,7 @@ import {
 import { type BetterAuthOptions, betterAuth, type User } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { admin } from "better-auth/plugins/admin";
+import { anonymous } from "better-auth/plugins/anonymous";
 import { organization as organizationPlugin } from "better-auth/plugins/organization";
 import {
   adminAc as organizationAdminAccess,
@@ -171,6 +172,7 @@ function calculateAge(date: Date) {
 export type AuthUser = User & {
   role?: string | null;
   dateOfBirth?: Date | null;
+  isAnonymous?: boolean;
 };
 
 function isEligibleForOrganizationCreation(user: AuthUser) {
@@ -478,12 +480,13 @@ export const auth = betterAuth<BetterAuthOptions>({
   },
   advanced: {
     defaultCookieAttributes: {
-      sameSite: "none",
-      secure: true,
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+      secure: process.env.NODE_ENV === "production",
       httpOnly: true,
     },
   },
   plugins: [
+    anonymous(),
     username({
       minUsernameLength: 3,
       maxUsernameLength: 30,

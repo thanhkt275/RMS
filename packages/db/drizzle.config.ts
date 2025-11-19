@@ -5,12 +5,19 @@ dotenv.config({
   path: "../../apps/server/.env",
 });
 
+const databaseUrl = process.env.DATABASE_URL || "";
+const databaseAuthToken = process.env.DATABASE_AUTH_TOKEN;
+
 export default defineConfig({
   schema: "./src/schema",
   out: "./src/migrations",
   dialect: "turso",
-  dbCredentials: {
-    url: process.env.DATABASE_URL || "",
-    authToken: process.env.DATABASE_AUTH_TOKEN,
-  },
+  dbCredentials: databaseAuthToken
+    ? {
+        url: databaseUrl,
+        authToken: databaseAuthToken,
+      }
+    : {
+        url: databaseUrl,
+      },
 });

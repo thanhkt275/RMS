@@ -44,10 +44,32 @@ function buildTournamentSortClause(sortBy: string, sortDirection: string) {
   }
 }
 
+type AccessResult = {
+  session: Awaited<ReturnType<typeof auth.api.getSession>>;
+  isAnonymous: boolean;
+};
+
+async function getAccess(
+  c: Context,
+  allowAnonymous = false
+): Promise<AccessResult | null> {
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  if (!session) {
+    return null;
+  }
+  const isAnonymous = Boolean(
+    (session.user as { isAnonymous?: boolean }).isAnonymous
+  );
+  if (isAnonymous && !allowAnonymous) {
+    return null;
+  }
+  return { session, isAnonymous };
+}
+
 tournamentCoreRoute.get("/", async (c: Context) => {
   try {
-    const session = await auth.api.getSession({ headers: c.req.raw.headers });
-    if (!session) {
+    const access = await getAccess(c, true);
+    if (!access) {
       return c.json({ error: "Unauthorized" }, 401);
     }
 
@@ -320,6 +342,11 @@ tournamentCoreRoute.post("/", async (c: Context) => {
 
 tournamentCoreRoute.get("/:identifier", async (c: Context) => {
   try {
+    const access = await getAccess(c, true);
+    if (!access) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+
     const { identifier } = c.req.param();
 
     if (!identifier) {

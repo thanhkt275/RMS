@@ -27,16 +27,19 @@ export default function UserMenu() {
     );
   }
 
+  const userName = session.user?.name ?? session.user?.email ?? "Account";
+  const userEmail = session.user?.email ?? "No email";
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline">{session.user.name}</Button>
+        <Button variant="outline">{userName}</Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent className="bg-card">
         <DropdownMenuLabel>My Account</DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuItem className="text-muted-foreground">
-          {session.user.email}
+          {userEmail}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem asChild>
