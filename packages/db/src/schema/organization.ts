@@ -572,6 +572,7 @@ export const tournamentMatches = sqliteTable("tournament_match", {
   homePlaceholder: text("home_placeholder"),
   awayPlaceholder: text("away_placeholder"),
   metadata: text("metadata"),
+  robotStatus: text("robot_status").$type<MatchRobotStatus | null>(),
   homeRobotStatus: text("home_robot_status").$type<MatchRobotStatus | null>(),
   homeRobotNotes: text("home_robot_notes"),
   awayRobotStatus: text("away_robot_status").$type<MatchRobotStatus | null>(),
