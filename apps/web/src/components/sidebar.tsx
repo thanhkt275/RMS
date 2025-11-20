@@ -31,7 +31,12 @@ const NAV_LINKS: readonly SidebarLink[] = [
     icon: LayoutDashboard,
     access: ACCESS_RULES.adminOnly,
   },
-  { to: "/teams", label: "Teams", icon: Users, access: ACCESS_RULES.registeredOnly },
+  {
+    to: "/teams",
+    label: "Teams",
+    icon: Users,
+    access: ACCESS_RULES.registeredOnly,
+  },
   {
     to: "/score-profiles",
     label: "Score profiles",

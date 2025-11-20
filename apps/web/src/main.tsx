@@ -44,9 +44,9 @@ if (!rootElement.innerHTML) {
       apiKey={import.meta.env.VITE_PUBLIC_POSTHOG_KEY}
       options={options}
     >
-        <AnonymousSessionGate>
-          <RouterProvider router={router} />
-        </AnonymousSessionGate>
+      <AnonymousSessionGate>
+        <RouterProvider router={router} />
+      </AnonymousSessionGate>
     </PostHogProvider>
   );
 }

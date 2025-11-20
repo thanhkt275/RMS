@@ -28,12 +28,12 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { authClient } from "@/lib/auth-client";
+import type { RegistrationStep } from "@/types/registration";
 import {
   ACCESS_RULES,
   type AccessControlUser,
   meetsAccessRule,
 } from "@/utils/access-control";
-import type { RegistrationStep } from "@/types/registration";
 import { formatDateTime } from "@/utils/date";
 import { queryClient } from "@/utils/query-client";
 import { getStepTypeLabel } from "@/utils/registrations";

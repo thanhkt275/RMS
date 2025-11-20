@@ -17,15 +17,15 @@ import {
 } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { authClient } from "@/lib/auth-client";
+import type {
+  RegistrationDetail,
+  RegistrationStep,
+} from "@/types/registration";
 import {
   ACCESS_RULES,
   type AccessControlUser,
   meetsAccessRule,
 } from "@/utils/access-control";
-import type {
-  RegistrationDetail,
-  RegistrationStep,
-} from "@/types/registration";
 import { formatDateTime } from "@/utils/date";
 import { queryClient } from "@/utils/query-client";
 import {

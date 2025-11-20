@@ -703,6 +703,30 @@ export const organizationInvitationsRelations = relations(
   })
 );
 
+export const tournamentAchievementsRelations = relations(
+  tournamentAchievements,
+  ({ one }) => ({
+    organization: one(organizations, {
+      fields: [tournamentAchievements.organizationId],
+      references: [organizations.id],
+    }),
+    tournament: one(tournaments, {
+      fields: [tournamentAchievements.tournamentId],
+      references: [tournaments.id],
+    }),
+  })
+);
+
+export const tournamentFieldAssignmentsRelations = relations(
+  tournamentFieldAssignments,
+  ({ one }) => ({
+    tournament: one(tournaments, {
+      fields: [tournamentFieldAssignments.tournamentId],
+      references: [tournaments.id],
+    }),
+  })
+);
+
 export const tournamentParticipationsRelations = relations(
   tournamentParticipations,
   ({ one, many }) => ({

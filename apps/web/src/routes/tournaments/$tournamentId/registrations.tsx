@@ -20,16 +20,16 @@ import { Select } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { authClient } from "@/lib/auth-client";
-import {
-  ACCESS_RULES,
-  type AccessControlUser,
-  meetsAccessRule,
-} from "@/utils/access-control";
 import type {
   RegistrationListItem,
   RegistrationStep,
   RegistrationStepType,
 } from "@/types/registration";
+import {
+  ACCESS_RULES,
+  type AccessControlUser,
+  meetsAccessRule,
+} from "@/utils/access-control";
 import { formatDateTime } from "@/utils/date";
 import { queryClient } from "@/utils/query-client";
 import {

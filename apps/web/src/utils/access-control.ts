@@ -121,4 +121,3 @@ export function meetsAccessRule(
 export function isAdminUser(user?: AccessControlUser | null) {
   return meetsAccessRule(user ?? undefined, ACCESS_RULES.adminOnly);
 }
-

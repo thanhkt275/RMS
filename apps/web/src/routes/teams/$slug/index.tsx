@@ -26,12 +26,12 @@ import {
 } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { authClient } from "@/lib/auth-client";
+import type { RegistrationStatus } from "@/types/registration";
 import {
   ACCESS_RULES,
   type AccessControlUser,
   meetsAccessRule,
 } from "@/utils/access-control";
-import type { RegistrationStatus } from "@/types/registration";
 import { getRegistrationStatusMeta } from "@/utils/registrations";
 import { formatRole, formatStatus } from "@/utils/teams";
 
@@ -882,7 +882,7 @@ function TournamentsTab({ team, isMentor }: TabProps) {
               const registrationId = tournament.registrationId;
               const showRegistrationAction =
                 Boolean(
-                tournament.registrationStatus &&
+                  tournament.registrationStatus &&
                     tournament.registrationStatus !== "APPROVED"
                 ) && Boolean(registrationId);
               const actionLabel = getRegistrationActionLabel(

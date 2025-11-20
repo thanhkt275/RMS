@@ -8,7 +8,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { authClient } from "@/lib/auth-client";
-import { type AccessControlUser, isAnonymousUser } from "@/utils/access-control";
+import {
+  type AccessControlUser,
+  isAnonymousUser,
+} from "@/utils/access-control";
 import { Button } from "./ui/button";
 import { Skeleton } from "./ui/skeleton";
 

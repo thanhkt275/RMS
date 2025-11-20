@@ -46,7 +46,7 @@ export function AnonymousSessionGate({ children }: AnonymousSessionGateProps) {
     run();
   }, [isPending, session]);
 
-  if (isPending || (!session && !error)) {
+  if (isPending || !(session || error)) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <Loader />
@@ -56,7 +56,7 @@ export function AnonymousSessionGate({ children }: AnonymousSessionGateProps) {
 
   if (error && !session) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-center text-sm text-destructive">
+      <div className="flex min-h-screen items-center justify-center text-center text-destructive text-sm">
         {error}
       </div>
     );
@@ -64,4 +64,3 @@ export function AnonymousSessionGate({ children }: AnonymousSessionGateProps) {
 
   return <>{children}</>;
 }
-

@@ -23,12 +23,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { authClient } from "@/lib/auth-client";
+import { cn } from "@/lib/utils";
 import {
   ACCESS_RULES,
   type AccessControlUser,
   meetsAccessRule,
 } from "@/utils/access-control";
-import { cn } from "@/lib/utils";
 import { queryClient } from "@/utils/query-client";
 import { canCreateTeam, MIN_TEAM_CREATION_AGE } from "@/utils/teams";
 

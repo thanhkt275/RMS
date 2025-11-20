@@ -42,7 +42,119 @@ const MIN_ORGANIZATION_CREATOR_AGE = 18;
 const SLUGIFY_REGEX_NON_ALPHANUM = /[^a-z0-9]+/g;
 const SLUGIFY_REGEX_LEADING_DASHES = /^-+/;
 const SLUGIFY_REGEX_TRAILING_DASHES = /-+$/;
-const FRONTEND_URL_REGEX_TRAILING_SLASH = /\/$/;
+const TRAILING_SLASH_REGEX = /\/+$/;
+const SINGLE_TRAILING_SLASH_REGEX = /\/$/;
+
+type NormalizeUrlOptions = {
+  required?: boolean;
+};
+
+function normalizeEnvUrl(
+  value: string | undefined,
+  name: string,
+  options: { required: true }
+): URL;
+function normalizeEnvUrl(
+  value: string | undefined,
+  name: string,
+  options?: NormalizeUrlOptions
+): URL | null;
+function normalizeEnvUrl(
+  value: string | undefined,
+  name: string,
+  { required = false }: NormalizeUrlOptions = {}
+): URL | null {
+  if (!value) {
+    if (required) {
+      throw new Error(`[auth] ${name} is required for authentication flows.`);
+    }
+    return null;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`[auth] ${name} must be a valid absolute URL.`);
+  }
+
+  if (isProduction && parsed.protocol !== "https:") {
+    throw new Error(
+      `[auth] ${name} must use https in production to protect auth tokens.`
+    );
+  }
+
+  parsed.search = "";
+  parsed.hash = "";
+  parsed.pathname = parsed.pathname.replace(TRAILING_SLASH_REGEX, "");
+  if (!parsed.pathname) {
+    parsed.pathname = "/";
+  }
+
+  return parsed;
+}
+
+function buildUrlWithPath(base: URL, pathname: string) {
+  const normalizedPathname = pathname.startsWith("/")
+    ? pathname
+    : `/${pathname}`;
+  const basePath =
+    base.pathname === "/"
+      ? ""
+      : base.pathname.replace(SINGLE_TRAILING_SLASH_REGEX, "");
+  const url = new URL(base.toString());
+  url.pathname = `${basePath}${normalizedPathname}`;
+  url.search = "";
+  url.hash = "";
+  return url;
+}
+
+function resolveTrustedOrigins(frontendBase: URL) {
+  const origins = new Set<string>([frontendBase.origin]);
+  const corsOrigin = process.env.CORS_ORIGIN;
+
+  if (corsOrigin) {
+    const candidates = corsOrigin.split(",").map((origin) => origin.trim());
+    for (const origin of candidates) {
+      if (!origin) {
+        continue;
+      }
+      try {
+        origins.add(new URL(origin).origin);
+      } catch {
+        throw new Error(
+          "[auth] CORS_ORIGIN must contain valid absolute URLs separated by commas."
+        );
+      }
+    }
+  }
+
+  if (origins.size === 0) {
+    throw new Error(
+      "[auth] At least one trusted origin must be configured for authentication routes."
+    );
+  }
+
+  return Array.from(origins);
+}
+
+const frontendBaseUrl = normalizeEnvUrl(
+  process.env.FRONTEND_URL,
+  "FRONTEND_URL",
+  {
+    required: true,
+  }
+);
+const invitationBaseUrl =
+  normalizeEnvUrl(
+    process.env.ORGANIZATION_INVITATION_URL,
+    "ORGANIZATION_INVITATION_URL"
+  ) ?? frontendBaseUrl;
+const resetPasswordWebhookUrl = normalizeEnvUrl(
+  resetPasswordWebhook,
+  "RESET_PASSWORD_WEBHOOK_URL"
+);
+const trustedOrigins = resolveTrustedOrigins(frontendBaseUrl);
 
 type ResendEmailInput = {
   to: string;
@@ -134,8 +246,8 @@ async function sendPasswordResetEmail({
     text: `Hi ${greetingName},\n\nReset your ${appName} password by visiting ${url}\n\nIf you did not request this change, you can ignore this message.`,
   });
 
-  if (resetPasswordWebhook) {
-    await fetch(resetPasswordWebhook, {
+  if (resetPasswordWebhookUrl) {
+    await fetch(resetPasswordWebhookUrl.toString(), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -216,19 +328,15 @@ function slugify(value: string) {
 }
 
 function buildOrganizationInvitationUrl(invitationId: string) {
-  const base =
-    process.env.ORGANIZATION_INVITATION_URL ||
-    (process.env.FRONTEND_URL
-      ? `${process.env.FRONTEND_URL.replace(
-          FRONTEND_URL_REGEX_TRAILING_SLASH,
-          ""
-        )}/organizations/invitations/accept`
-      : "");
-  if (!base) {
+  if (!invitationBaseUrl) {
     return "";
   }
-  const separator = base.includes("?") ? "&" : "?";
-  return `${base}${separator}invitationId=${encodeURIComponent(invitationId)}`;
+  const url = buildUrlWithPath(
+    invitationBaseUrl,
+    "/organizations/invitations/accept"
+  );
+  url.searchParams.set("invitationId", invitationId);
+  return url.toString();
 }
 
 async function ensureMentorRole(userId: string) {
@@ -321,15 +429,11 @@ export async function sendTeamMemberAddedEmail({
   teamName: string;
   inviterName: string;
 }) {
-  const loginUrl = process.env.FRONTEND_URL
-    ? `${process.env.FRONTEND_URL.replace(FRONTEND_URL_REGEX_TRAILING_SLASH, "")}/sign-in`
-    : "";
+  const loginUrl = buildUrlWithPath(frontendBaseUrl, "/sign-in").toString();
 
-  const loginBlock = loginUrl
-    ? `<p><a href="${loginUrl}" style="display:inline-block;padding:12px 20px;background-color:#4f46e5;border-radius:6px;color:#ffffff;text-decoration:none;">Log in to view team</a></p>
+  const loginBlock = `<p><a href="${loginUrl}" style="display:inline-block;padding:12px 20px;background-color:#4f46e5;border-radius:6px;color:#ffffff;text-decoration:none;">Log in to view team</a></p>
 <p>If the button does not work, copy and paste this link into your browser:</p>
-<p>${loginUrl}</p>`
-    : "";
+<p>${loginUrl}</p>`;
 
   await sendResendEmail({
     to: email,
@@ -361,15 +465,11 @@ export async function sendTeamMemberWelcomeEmail({
   inviterName: string;
   temporaryPassword: string;
 }) {
-  const loginUrl = process.env.FRONTEND_URL
-    ? `${process.env.FRONTEND_URL.replace(FRONTEND_URL_REGEX_TRAILING_SLASH, "")}/sign-in`
-    : "";
+  const loginUrl = buildUrlWithPath(frontendBaseUrl, "/sign-in").toString();
 
-  const loginBlock = loginUrl
-    ? `<p><a href="${loginUrl}" style="display:inline-block;padding:12px 20px;background-color:#4f46e5;border-radius:6px;color:#ffffff;text-decoration:none;">Log in now</a></p>
+  const loginBlock = `<p><a href="${loginUrl}" style="display:inline-block;padding:12px 20px;background-color:#4f46e5;border-radius:6px;color:#ffffff;text-decoration:none;">Log in now</a></p>
 <p>If the button does not work, copy and paste this link into your browser:</p>
-<p>${loginUrl}</p>`
-    : "";
+<p>${loginUrl}</p>`;
 
   await sendResendEmail({
     to: email,
@@ -412,14 +512,25 @@ export const auth = betterAuth<BetterAuthOptions>({
       invitation: organizationInvitations,
     },
   }),
-  trustedOrigins: [process.env.CORS_ORIGIN || ""],
+  trustedOrigins,
   emailVerification: {
     sendVerificationEmail: async (data) => {
-      const frontendUrl = process.env.FRONTEND_URL;
       const token = new URL(data.url).searchParams.get("token");
-      const verificationUrl = `${frontendUrl}/verify-email?token=${token}`;
+      if (!token) {
+        throw new Error(
+          "[auth] Verification token missing in the callback URL."
+        );
+      }
+      const verificationUrl = buildUrlWithPath(
+        frontendBaseUrl,
+        "/verify-email"
+      );
+      verificationUrl.searchParams.set("token", token);
 
-      await sendVerificationEmail({ user: data.user, url: verificationUrl });
+      await sendVerificationEmail({
+        user: data.user,
+        url: verificationUrl.toString(),
+      });
     },
     sendOnSignUp: true,
     autoSignInAfterVerification: false,
@@ -462,10 +573,7 @@ export const auth = betterAuth<BetterAuthOptions>({
         type: "date",
         required: true,
         validator: {
-          input: z.coerce.date({
-            message: "Date of birth is required", // Changed from required_error
-            invalid_type_error: "Date of birth is invalid",
-          }),
+          input: z.coerce.date(),
         },
       },
       school: {

@@ -192,11 +192,11 @@ const TeamMembersList: React.FC<TeamMembersListProps> = ({
                       <div className="flex items-center gap-3">
                         <Avatar className="h-10 w-10">
                           <AvatarImage
-                            alt={member.name}
-                            src={`https://api.dicebear.com/7.x/initials/svg?seed=${member.name}`}
+                            alt={member.name ?? "User"}
+                            src={`https://api.dicebear.com/7.x/initials/svg?seed=${member.name ?? member.email}`}
                           />
                           <AvatarFallback>
-                            {member.name.charAt(0)}
+                            {member.name?.charAt(0) ?? "U"}
                           </AvatarFallback>
                         </Avatar>
                         <div>
