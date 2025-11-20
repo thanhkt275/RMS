@@ -674,12 +674,34 @@ export const tournamentsRelations = relations(tournaments, ({ many }) => ({
 }));
 
 export const organizationsRelations = relations(organizations, ({ many }) => ({
-  members: many(organizationMembers),
-  invitations: many(organizationInvitations),
+  members: many(organizationMembers, { relationName: "organization" }),
+  invitations: many(organizationInvitations, { relationName: "organization" }),
   tournamentParticipations: many(tournamentParticipations),
   stageTeams: many(tournamentStageTeams),
   achievements: many(tournamentAchievements),
 }));
+
+export const organizationMembersRelations = relations(
+  organizationMembers,
+  ({ one }) => ({
+    organization: one(organizations, {
+      fields: [organizationMembers.organizationId],
+      references: [organizations.id],
+      relationName: "organization",
+    }),
+  })
+);
+
+export const organizationInvitationsRelations = relations(
+  organizationInvitations,
+  ({ one }) => ({
+    organization: one(organizations, {
+      fields: [organizationInvitations.organizationId],
+      references: [organizations.id],
+      relationName: "organization",
+    }),
+  })
+);
 
 export const tournamentParticipationsRelations = relations(
   tournamentParticipations,
