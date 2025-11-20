@@ -1,61 +1,33 @@
-import { type AppDB, db } from "@rms-modern/db";
-import {
-  type organizations,
-  tournamentMatches,
-  tournamentStageRankings,
-  tournamentStages,
-  tournamentStageTeams,
-} from "@rms-modern/db/schema/organization";
-import { eq } from "drizzle-orm";
-import {
-  parseScoreData,
-  recalculateStageRankings,
-} from "../routes/tournaments/utils";
+import { prisma } from "../lib/prisma";
+import { parseScoreData, recalculateStageRankings } from "../routes/tournaments/utils";
 
 /**
  * Fetches all matches for a given stage and returns them as a map for quick lookup.
  */
 export async function fetchStageMatchesMap(stageId: string) {
-  const matches = await (db as AppDB)
-    .select()
-    .from(tournamentMatches)
-    .where(eq(tournamentMatches.stageId, stageId));
-
-  return new Map(
-    matches.map((match: typeof tournamentMatches.$inferSelect) => [
-      match.id,
-      match,
-    ])
-  );
+  const matches = await prisma.tournamentMatch.findMany({ where: { stageId } });
+  return new Map(matches.map((m) => [m.id, m]));
 }
 
 /**
  * Fetches all teams for a given stage and returns them as a map for quick lookup.
  */
 export async function fetchStageTeamsMap(stageId: string) {
-  const teams = await (db as AppDB).query.tournamentStageTeams.findMany({
-    where: eq(tournamentStageTeams.stageId, stageId), // Corrected table reference
-    with: {
-      organization: true,
-    },
+  const teams = await prisma.tournamentStageTeam.findMany({
+    where: { stageId },
+    include: { organization: true },
   });
 
   return new Map(
-    teams.map(
-      (
-        team: typeof tournamentStageTeams.$inferSelect & {
-          organization: typeof organizations.$inferSelect;
-        }
-      ) => [
+    teams.map((team) => [
         team.organizationId,
         {
           id: team.organizationId,
           name: team.organization.name,
           logo: team.organization.logo,
-          seed: team.seed,
+        seed: team.seed ?? null,
         },
-      ]
-    )
+    ])
   );
 }
 
@@ -63,12 +35,10 @@ export async function fetchStageTeamsMap(stageId: string) {
  * Fetches leaderboard rows for a specific stage.
  */
 export async function fetchStageLeaderboardRows(stageId: string) {
-  const rankings = await (db as AppDB).query.tournamentStageRankings.findMany({
-    where: eq(tournamentStageRankings.stageId, stageId),
-    with: {
-      organization: true,
-    },
-    orderBy: (table, { asc }) => [asc(table.rank)],
+  const rankings = await prisma.tournamentStageRanking.findMany({
+    where: { stageId },
+    include: { organization: true },
+    orderBy: { rank: "asc" },
   });
 
   return rankings.map((ranking) => ({
@@ -80,9 +50,9 @@ export async function fetchStageLeaderboardRows(stageId: string) {
     losses: ranking.losses,
     draws: ranking.ties,
     matchesPlayed: ranking.gamesPlayed,
-    scoreData: parseScoreData(ranking.scoreData),
-    teamName: ranking.organization.name,
-    teamLogo: ranking.organization.logo,
+    scoreData: parseScoreData(ranking.scoreData as unknown as string | null),
+    teamName: ranking.organization?.name ?? null,
+    teamLogo: ranking.organization?.logo ?? null,
   }));
 }
 
@@ -116,15 +86,10 @@ export function readStageLeaderboardOrder(
  * Synchronizes the stage leaderboard by recalculating rankings.
  */
 export async function syncStageLeaderboard(stageId: string) {
-  const stage = await db.query.tournamentStages.findFirst({
-    where: eq(tournamentStages.id, stageId),
-  });
+  const stage = await prisma.tournamentStage.findUnique({ where: { id: stageId } });
+  if (!stage) return;
 
-  if (!stage) {
-    return;
-  }
-
-  await db.transaction(async (tx) => {
+  await prisma.$transaction(async (tx) => {
     await recalculateStageRankings(tx, stage.id);
   });
 }

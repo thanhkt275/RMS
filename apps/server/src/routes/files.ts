@@ -3,12 +3,10 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { env } from "node:process";
 import { auth } from "@rms-modern/auth";
-import { db } from "@rms-modern/db";
-import { files } from "@rms-modern/db/schema/files";
-import { and, desc, eq, isNull } from "drizzle-orm";
 import { type Context, Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { formatS3Path, isS3Enabled, uploadFileToS3 } from "../utils/s3";
+import { prisma } from "../lib/prisma";
 
 const filesRoute = new Hono();
 
@@ -169,9 +167,8 @@ filesRoute.post("/upload", async (c: Context) => {
     }
 
     // Save to database
-    const fileRecords = await db
-      .insert(files)
-      .values({
+    const fileRecord = await prisma.file.create({
+      data: {
         id: fileId,
         originalName: file.name,
         fileName,
@@ -179,16 +176,29 @@ filesRoute.post("/upload", async (c: Context) => {
         publicUrl: storageData.url,
         mimeType: file.type,
         size: file.size,
+        width: null, // TODO: Extract from image if applicable
+        height: null, // TODO: Extract from image if applicable
+        thumbnailPath: null, // TODO: Generate thumbnail if applicable
+        thumbnailUrl: null, // TODO: Generate thumbnail URL if applicable
         category,
         uploadedBy: userId,
-        metadata: JSON.stringify({
+        relatedEntityId: null, // TODO: Set if file is related to specific entity
+        relatedEntityType: null, // TODO: Set if file is related to specific entity
+        metadata: {
           uploadedAt: new Date().toISOString(),
           userAgent: c.req.header("user-agent"),
-        }),
-      })
-      .returning();
-
-    const fileRecord = fileRecords[0];
+        },
+      },
+      select: {
+        id: true,
+        publicUrl: true,
+        fileName: true,
+        originalName: true,
+        size: true,
+        mimeType: true,
+        category: true,
+      },
+    });
     if (!fileRecord) {
       throw new HTTPException(500, {
         message: "Failed to create file record.",
@@ -230,13 +240,11 @@ filesRoute.get("/:id", async (c: Context) => {
 
   const fileId = c.req.param("id");
 
-  const [fileRecord] = await db
-    .select()
-    .from(files)
-    .where(eq(files.id, fileId))
-    .limit(1);
+  const fileRecord = await prisma.file.findUnique({
+    where: { id: fileId },
+  });
 
-  if (!fileRecord) {
+  if (!fileRecord || fileRecord.deletedAt) {
     throw new HTTPException(404, {
       message: "File not found.",
     });
@@ -266,14 +274,13 @@ filesRoute.get("/", async (c: Context) => {
 
   const userId = session.user.id;
 
-  const userFiles = await db
-    .select()
-    .from(files)
-    .where(and(eq(files.uploadedBy, userId), isNull(files.deletedAt)))
-    .orderBy(desc(files.createdAt));
+  const userFiles = await prisma.file.findMany({
+    where: { uploadedBy: userId, deletedAt: null },
+    orderBy: { createdAt: "desc" },
+  });
 
   return c.json({
-    files: userFiles.map((fileRecord: typeof files.$inferSelect) => ({
+    files: userFiles.map((fileRecord: (typeof userFiles)[number]) => ({
       id: fileRecord.id,
       url: fileRecord.publicUrl,
       fileName: fileRecord.fileName,
@@ -299,11 +306,9 @@ filesRoute.delete("/:id", async (c: Context) => {
   const userId = session.user.id;
   const fileId = c.req.param("id");
 
-  const [fileRecord] = await db
-    .select()
-    .from(files)
-    .where(eq(files.id, fileId))
-    .limit(1);
+  const fileRecord = await prisma.file.findUnique({
+    where: { id: fileId },
+  });
 
   if (!fileRecord) {
     throw new HTTPException(404, {
@@ -317,10 +322,10 @@ filesRoute.delete("/:id", async (c: Context) => {
     });
   }
 
-  await db
-    .update(files)
-    .set({ deletedAt: new Date() })
-    .where(eq(files.id, fileId));
+  await prisma.file.update({
+    where: { id: fileId },
+    data: { deletedAt: new Date() },
+  });
 
   return c.json({ success: true, message: "File deleted successfully." });
 });
@@ -328,7 +333,10 @@ filesRoute.delete("/:id", async (c: Context) => {
 // Serve static files (for local development)
 if (USE_LOCAL_STORAGE) {
   filesRoute.get("/serve/:fileName", async (c: Context) => {
-    const { fileName } = c.req.param();
+    const fileName = c.req.param("fileName");
+    if (!fileName) {
+      throw new HTTPException(400, { message: "File name is required" });
+    }
     const filePath = join(UPLOAD_DIR, fileName);
 
     try {

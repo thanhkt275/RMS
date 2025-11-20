@@ -1,6 +1,4 @@
-import { type AppDB, db } from "@rms-modern/db";
-import { tournamentMatches } from "@rms-modern/db/schema/organization";
-import { and, eq } from "drizzle-orm";
+import { prisma } from "../lib/prisma";
 
 export type RobotQueueCheckResult = {
   passed: boolean;
@@ -20,47 +18,31 @@ export type MatchRobotCheckRecord = {
 
 /**
  * Check if a robot/team passes inspection for a match
- * This validates that the robot meets all required criteria to participate
  */
 export function checkRobotPassStatus(
   _matchId: string,
   _teamId: string,
-  checkData: {
-    passed: boolean;
-    notes?: string;
-  }
+  checkData: { passed: boolean; notes?: string }
 ): RobotQueueCheckResult {
-  // Validation logic for robot inspection
-  // Can include: weight checks, size checks, rule compliance, safety checks, etc.
-
   const status = checkData.passed ? "PASS" : "FAIL";
-
-  return {
-    passed: checkData.passed,
-    status,
-    notes: checkData.notes,
-  };
+  return { passed: checkData.passed, status, notes: checkData.notes };
 }
 
 /**
  * Store robot status for a match
- * Updates the match record with the robot pass/fail status
  */
 export async function storeMatchRobotStatus(
   matchId: string,
   status: "PASS" | "FAIL",
   record?: MatchRobotCheckRecord
 ): Promise<void> {
-  // Store check record for audit trail (optional additional table)
-  // For now, we store in the match's robotStatus field
-
-  await (db as AppDB)
-    .update(tournamentMatches)
-    .set({
+  await prisma.tournamentMatch.update({
+    where: { id: matchId },
+    data: {
       robotStatus: status,
       metadata:
         record && status === "FAIL"
-          ? JSON.stringify({
+          ? {
               failureReasons: [
                 {
                   homeTeam: {
@@ -74,11 +56,11 @@ export async function storeMatchRobotStatus(
                   timestamp: record.timestamp.toISOString(),
                 },
               ],
-            })
-          : null,
+            }
+          : undefined,
       updatedAt: new Date(),
-    })
-    .where(eq(tournamentMatches.id, matchId));
+    },
+  });
 }
 
 /**
@@ -88,84 +70,57 @@ export async function getMatchRobotStatus(matchId: string): Promise<{
   status: "PASS" | "FAIL" | null;
   notes?: string;
 } | null> {
-  const match = await (db as AppDB).query.tournamentMatches.findFirst({
-    where: eq(tournamentMatches.id, matchId),
+  const match = await prisma.tournamentMatch.findUnique({
+    where: { id: matchId },
+    select: { robotStatus: true },
   });
-
-  if (!match) {
-    return null;
-  }
-
-  return {
-    status: match.robotStatus,
-  };
+  if (!match) return null;
+  return { status: match.robotStatus };
 }
 
 /**
- * Check and transition match status based on robot inspection
- * When robot passes, transition from SCHEDULED -> READY
- * When robot fails, keep in SCHEDULED for rescheduling
+ * Transition match status based on robot inspection
  */
 export async function updateMatchStatusBasedOnRobotCheck(
   matchId: string,
   robotStatus: "PASS" | "FAIL"
 ): Promise<void> {
-  const match = await (db as AppDB).query.tournamentMatches.findFirst({
-    where: eq(tournamentMatches.id, matchId),
-  });
+  const match = await prisma.tournamentMatch.findUnique({ where: { id: matchId } });
+  if (!match) throw new Error("Match not found");
 
-  if (!match) {
-    throw new Error("Match not found");
-  }
-
-  // Only transition if current status allows it
   if (match.status === "SCHEDULED") {
     const newStatus = robotStatus === "PASS" ? "READY" : "SCHEDULED";
-
-    await (db as AppDB)
-      .update(tournamentMatches)
-      .set({
-        status: newStatus,
-        robotStatus,
-        updatedAt: new Date(),
-      })
-      .where(eq(tournamentMatches.id, matchId));
+    await prisma.tournamentMatch.update({
+      where: { id: matchId },
+      data: { status: newStatus, robotStatus, updatedAt: new Date() },
+    });
   }
 }
 
 /**
  * Reschedule a canceled match
- * Simple operation - just update the scheduled time
  */
 export async function rescheduleCanceledMatch(
   matchId: string,
   newScheduledTime: Date
 ): Promise<void> {
-  const match = await (db as AppDB).query.tournamentMatches.findFirst({
-    where: eq(tournamentMatches.id, matchId),
-  });
+  const match = await prisma.tournamentMatch.findUnique({ where: { id: matchId } });
+  if (!match) throw new Error("Match not found");
+  if (match.status !== "CANCELED") throw new Error("Can only reschedule canceled matches");
 
-  if (!match) {
-    throw new Error("Match not found");
-  }
-
-  if (match.status !== "CANCELED") {
-    throw new Error("Can only reschedule canceled matches");
-  }
-
-  await (db as AppDB)
-    .update(tournamentMatches)
-    .set({
+  await prisma.tournamentMatch.update({
+    where: { id: matchId },
+    data: {
       status: "SCHEDULED",
       scheduledAt: newScheduledTime,
-      robotStatus: null, // Reset robot status for re-inspection
+      robotStatus: null,
       updatedAt: new Date(),
-    })
-    .where(eq(tournamentMatches.id, matchId));
+    },
+  });
 }
 
 /**
- * Get all matches ready for queuing (SCHEDULED matches with robot inspection pending)
+ * Get all matches ready for queuing (SCHEDULED and robotStatus is null)
  */
 export async function getMatchesReadyForQueuing(
   tournamentId: string,
@@ -180,28 +135,20 @@ export async function getMatchesReadyForQueuing(
     status: string;
   }>
 > {
-  return await (db as AppDB)
-    .select({
-      id: tournamentMatches.id,
-      round: tournamentMatches.round,
-      homeTeamId: tournamentMatches.homeTeamId,
-      awayTeamId: tournamentMatches.awayTeamId,
-      scheduledAt: tournamentMatches.scheduledAt,
-      status: tournamentMatches.status,
-    })
-    .from(tournamentMatches)
-    .where(
-      stageId
-        ? and(
-            eq(tournamentMatches.tournamentId, tournamentId),
-            eq(tournamentMatches.stageId, stageId),
-            eq(tournamentMatches.status, "SCHEDULED"),
-            eq(tournamentMatches.robotStatus, null)
-          )
-        : and(
-            eq(tournamentMatches.tournamentId, tournamentId),
-            eq(tournamentMatches.status, "SCHEDULED"),
-            eq(tournamentMatches.robotStatus, null)
-          )
-    );
+  const where: any = { tournamentId, status: "SCHEDULED", robotStatus: null };
+  if (stageId) where.stageId = stageId;
+
+  const matches = await prisma.tournamentMatch.findMany({
+    where,
+    select: {
+      id: true,
+      round: true,
+      homeTeamId: true,
+      awayTeamId: true,
+      scheduledAt: true,
+      status: true,
+    },
+  });
+
+  return matches;
 }

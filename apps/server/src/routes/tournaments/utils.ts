@@ -1,16 +1,5 @@
 import crypto from "node:crypto";
-import { type AppDB, db } from "@rms-modern/db";
-import type { TournamentStageStatus } from "@rms-modern/db/schema/organization";
-import {
-  type TournamentFieldRole,
-  tournamentFieldRoles,
-  tournamentMatches,
-  tournamentStageRankings,
-  tournamentStages,
-  tournamentStageTeams,
-  tournaments,
-} from "@rms-modern/db/schema/organization";
-import { and, eq, not, or } from "drizzle-orm";
+import { prisma, type Prisma } from "../../lib/prisma";
 import type { z } from "zod";
 import type {
   FieldAssignmentRow,
@@ -24,6 +13,16 @@ import type {
   StageRecord,
   StageResponse,
 } from "./types";
+
+// Local enums to avoid drizzle coupling
+export type TournamentFieldRole = "TSO" | "HEAD_REFEREE" | "SCORE_KEEPER" | "QUEUER";
+export const tournamentFieldRoles: TournamentFieldRole[] = [
+  "TSO",
+  "HEAD_REFEREE",
+  "SCORE_KEEPER",
+  "QUEUER",
+];
+export type TournamentStageStatus = "PENDING" | "ACTIVE" | "COMPLETED";
 
 // Simplified score profile type for match outcome calculations
 type ScoreProfile = {
@@ -40,10 +39,9 @@ type ScoreProfile = {
  * @returns The tournament record or null if not found.
  */
 export async function getTournamentByIdentifier(identifier: string) {
-  const tournament = await db.query.tournaments.findFirst({
-    where: or(eq(tournaments.id, identifier), eq(tournaments.slug, identifier)),
+  return prisma.tournament.findFirst({
+    where: { OR: [{ id: identifier }, { slug: identifier }] },
   });
-  return tournament;
 }
 
 /**
@@ -51,12 +49,16 @@ export async function getTournamentByIdentifier(identifier: string) {
  * @param scoreDataJson JSON string containing score data.
  * @returns Parsed ScoreData object or null.
  */
-export function parseScoreData(scoreDataJson: string | null): ScoreData | null {
-  if (!scoreDataJson) {
-    return null;
-  }
+export function parseScoreData(scoreData: unknown): ScoreData | null {
+  if (!scoreData) return null;
   try {
-    return JSON.parse(scoreDataJson) as ScoreData;
+    if (typeof scoreData === "string") {
+      return JSON.parse(scoreData) as ScoreData;
+    }
+    if (typeof scoreData === "object") {
+      return scoreData as ScoreData;
+    }
+    return null;
   } catch (error) {
     console.error("Error parsing score data:", error);
     return null;
@@ -124,18 +126,25 @@ export function formatMatchTeam(
  * Builds a structured response for stages, including teams.
  */
 export function buildStageResponses(
-  stages: (typeof tournamentStages.$inferSelect & {
+  stages: Array<{
+    id: string;
+    tournamentId: string;
+    name: string;
+    type: StageRecord["type"];
+    status: TournamentStageStatus;
+    stageOrder: number;
+    configuration: string | null;
+    scoreProfileId?: string | null;
+    startedAt: Date | null;
+    completedAt: Date | null;
+    createdAt: Date;
+    updatedAt: Date;
     teams?: Array<{
       organizationId: string;
       seed: number | null;
-      organization: {
-        name: string;
-        slug: string;
-        logo: string | null;
-        location: string | null;
-      };
+      organization: { name: string; slug: string; logo: string | null; location: string | null };
     }>;
-  })[]
+  }>
 ): StageResponse[] {
   return stages.map((stage) => ({
     id: stage.id,
@@ -207,20 +216,18 @@ export function resolveStageOrder(
  * Assigns teams to a stage.
  */
 export async function assignStageTeams(stage: StageRecord, teamIds: string[]) {
-  await db.transaction(async (tx) => {
-    // Clear existing teams
-    await tx
-      .delete(tournamentStageTeams)
-      .where(eq(tournamentStageTeams.stageId, stage.id));
-
-    // Insert new teams
+  await prisma.$transaction(async (tx) => {
+    await tx.tournamentStageTeam.deleteMany({ where: { stageId: stage.id } });
     if (teamIds.length > 0) {
-      const insertValues = teamIds.map((teamId) => ({
-        id: crypto.randomUUID(),
-        stageId: stage.id,
-        organizationId: teamId,
-      }));
-      await tx.insert(tournamentStageTeams).values(insertValues);
+      await tx.tournamentStageTeam.createMany({
+        data: teamIds.map((teamId) => ({
+          id: crypto.randomUUID(),
+          stageId: stage.id,
+          organizationId: teamId,
+          seed: null, // Will be set later if needed
+          createdAt: new Date(),
+        })),
+      });
     }
   });
 }
@@ -230,33 +237,19 @@ export async function assignStageTeams(stage: StageRecord, teamIds: string[]) {
  */
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Ranking calculation requires complex logic for stats tracking
 export async function recalculateStageRankings(
-  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  tx: Prisma.TransactionClient,
   stageId: string
 ) {
-  // Fetch all matches for the stage
-  const matches = await tx
-    .select()
-    .from(tournamentMatches)
-    .where(eq(tournamentMatches.stageId, stageId));
+  const [matches, stage] = await Promise.all([
+    tx.tournamentMatch.findMany({ where: { stageId } }),
+    tx.tournamentStage.findUnique({ where: { id: stageId } }),
+  ]);
 
-  // Fetch stage configuration to get score profile
-  const stageRow = await tx
-    .select()
-    .from(tournamentStages)
-    .where(eq(tournamentStages.id, stageId))
-    .limit(1)
-    .then((rows) => rows[0]);
-
-  if (!stageRow) {
+  if (!stage) {
     console.warn(`Stage ${stageId} not found.`);
     return;
   }
 
-  // Cast to include scoreProfileId which exists in schema but may not be in type inference
-  const stage = stageRow as typeof stageRow & { scoreProfileId: string | null };
-
-  // Use a default scoring system: 3 points for win, 1 for draw, 0 for loss
-  // In a full implementation, fetch the actual score profile from the database
   const scoreProfile: ScoreProfile = {
     id: stage.scoreProfileId || "default",
     name: "Default",
@@ -278,94 +271,56 @@ export async function recalculateStageRankings(
   >();
 
   for (const match of matches) {
-    if (match.status === "COMPLETED" && match.homeScore && match.awayScore) {
+    if (match.status === "COMPLETED" && match.homeScore != null && match.awayScore != null) {
       const homeTeamId = match.homeTeamId;
       const awayTeamId = match.awayTeamId;
+      if (!(homeTeamId && awayTeamId)) continue;
 
-      if (!(homeTeamId && awayTeamId)) {
-        continue;
-      }
+      const outcome = determineMatchOutcome(match.homeScore, match.awayScore, scoreProfile);
 
-      const outcome = determineMatchOutcome(
-        match.homeScore,
-        match.awayScore,
-        scoreProfile
-      );
-
-      // Update home team stats
-      const homeStats = teamStats.get(homeTeamId) || {
-        wins: 0,
-        losses: 0,
-        draws: 0,
-        score: 0,
-        tieBreaker: 0,
-        matchesPlayed: 0,
-      };
+      const homeStats = teamStats.get(homeTeamId) || { wins: 0, losses: 0, draws: 0, score: 0, tieBreaker: 0, matchesPlayed: 0 };
       homeStats.matchesPlayed += 1;
       homeStats.score += outcome.homeTeamPoints;
-      homeStats.tieBreaker += match.homeScore - match.awayScore; // Score difference
-      if (outcome.result === "HOME_WIN") {
-        homeStats.wins += 1;
-      } else if (outcome.result === "AWAY_WIN") {
-        homeStats.losses += 1;
-      } else {
-        homeStats.draws += 1;
-      }
+      homeStats.tieBreaker += (match.homeScore || 0) - (match.awayScore || 0);
+      if (outcome.result === "HOME_WIN") homeStats.wins += 1; else if (outcome.result === "AWAY_WIN") homeStats.losses += 1; else homeStats.draws += 1;
       teamStats.set(homeTeamId, homeStats);
 
-      // Update away team stats
-      const awayStats = teamStats.get(awayTeamId) || {
-        wins: 0,
-        losses: 0,
-        draws: 0,
-        score: 0,
-        tieBreaker: 0,
-        matchesPlayed: 0,
-      };
+      const awayStats = teamStats.get(awayTeamId) || { wins: 0, losses: 0, draws: 0, score: 0, tieBreaker: 0, matchesPlayed: 0 };
       awayStats.matchesPlayed += 1;
       awayStats.score += outcome.awayTeamPoints;
-      awayStats.tieBreaker += match.awayScore - match.homeScore; // Score difference
-      if (outcome.result === "AWAY_WIN") {
-        awayStats.wins += 1;
-      } else if (outcome.result === "HOME_WIN") {
-        awayStats.losses += 1;
-      } else {
-        awayStats.draws += 1;
-      }
+      awayStats.tieBreaker += (match.awayScore || 0) - (match.homeScore || 0);
+      if (outcome.result === "AWAY_WIN") awayStats.wins += 1; else if (outcome.result === "HOME_WIN") awayStats.losses += 1; else awayStats.draws += 1;
       teamStats.set(awayTeamId, awayStats);
     }
   }
 
-  // Convert map to array and sort for ranking
   const rankedTeams = Array.from(teamStats.entries())
     .map(([teamId, stats]) => ({ teamId, ...stats }))
-    .sort((a, b) => {
-      if (b.score !== a.score) {
-        return b.score - a.score;
-      }
-      return b.tieBreaker - a.tieBreaker; // Tie-breaker: score difference
+    .sort((a, b) => (b.score !== a.score ? b.score - a.score : b.tieBreaker - a.tieBreaker));
+
+  await tx.tournamentStageRanking.deleteMany({ where: { stageId } });
+  if (rankedTeams.length > 0) {
+    const now = new Date();
+    await tx.tournamentStageRanking.createMany({
+      data: rankedTeams.map((team, index) => ({
+        id: crypto.randomUUID(),
+        stageId,
+        organizationId: team.teamId,
+        rank: index + 1,
+        totalScore: team.score,
+        loseRate: team.tieBreaker,
+        wins: team.wins,
+        losses: team.losses,
+        ties: team.draws,
+        gamesPlayed: team.matchesPlayed,
+        rankingPoints: 0, // TODO: Calculate from score profile
+        autonomousPoints: 0, // TODO: Calculate from score profile
+        strengthPoints: 0, // TODO: Calculate from score profile
+        scoreData: undefined, // TODO: Store detailed score breakdown
+        createdAt: now,
+        updatedAt: now,
+      })),
     });
-
-  // Assign ranks and prepare for DB insert
-  const rankingInserts = rankedTeams.map((team, index) => ({
-    id: crypto.randomUUID(),
-    stageId,
-    organizationId: team.teamId,
-    rank: index + 1,
-    score: team.score,
-    tieBreaker: team.tieBreaker,
-    wins: team.wins,
-    losses: team.losses,
-    draws: team.draws,
-    matchesPlayed: team.matchesPlayed,
-  }));
-
-  // Clear existing rankings and insert new ones
-  await tx
-    .delete(tournamentStageRankings)
-    .where(eq(tournamentStageRankings.stageId, stageId));
-  if (rankingInserts.length > 0) {
-    await tx.insert(tournamentStageRankings).values(rankingInserts);
   }
 }
 
@@ -376,22 +331,16 @@ export async function handleStageMatchPreparation(
   stage: StageRecord,
   warnings: string[]
 ) {
-  // Example: Check if all teams are assigned, matches generated, etc.
-  const assignedTeams = await (db as AppDB)
-    .select()
-    .from(tournamentStageTeams)
-    .where(eq(tournamentStageTeams.stageId, stage.id));
+  const [teamCount, matchCount] = await Promise.all([
+    prisma.tournamentStageTeam.count({ where: { stageId: stage.id } }),
+    prisma.tournamentMatch.count({ where: { stageId: stage.id } }),
+  ]);
 
-  if (assignedTeams.length < 2) {
+  if (teamCount < 2) {
     warnings.push("Not enough teams assigned to the stage.");
   }
 
-  const generatedMatches = await (db as AppDB)
-    .select()
-    .from(tournamentMatches)
-    .where(eq(tournamentMatches.stageId, stage.id));
-
-  if (generatedMatches.length === 0) {
+  if (matchCount === 0) {
     warnings.push("No matches have been generated for this stage.");
   }
 }
@@ -403,19 +352,13 @@ export async function ensureStageIsCompletable(
   stage: StageRecord,
   warnings: string[]
 ) {
-  const incompleteMatches = await (db as AppDB)
-    .select()
-    .from(tournamentMatches)
-    .where(
-      and(
-        eq(tournamentMatches.stageId, stage.id),
-        not(eq(tournamentMatches.status, "COMPLETED"))
-      )
-    );
+  const incompleteMatches = await prisma.tournamentMatch.count({
+    where: { stageId: stage.id, status: { not: "COMPLETED" } },
+  });
 
-  if (incompleteMatches.length > 0) {
+  if (incompleteMatches > 0) {
     warnings.push(
-      `There are ${incompleteMatches.length} incomplete matches in this stage.`
+      `There are ${incompleteMatches} incomplete matches in this stage.`
     );
   }
 }
@@ -878,20 +821,9 @@ export function normalizeFieldCount(fieldCount: number | null): number {
 }
 
 /**
- * Applies a WHERE clause to a Drizzle query.
- * This is a generic helper to allow dynamic WHERE clauses.
+ * Legacy helper from Drizzle days. No-op for Prisma code paths.
  */
-export function applyWhereClause<
-  // biome-ignore lint/suspicious/noExplicitAny: Drizzle ORM requires flexible typing for dynamic queries
-  TQuery extends { where: (clause: any) => TQuery },
->(
-  query: TQuery,
-  // biome-ignore lint/suspicious/noExplicitAny: Drizzle ORM requires flexible typing for dynamic queries
-  whereClause: any[]
-): TQuery {
-  if (whereClause.length > 0) {
-    return query.where(and(...whereClause)) as TQuery;
-  }
+export function applyWhereClause<T>(query: T, _whereClause: unknown[]): T {
   return query;
 }
 

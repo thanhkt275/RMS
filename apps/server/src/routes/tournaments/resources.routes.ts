@@ -1,11 +1,6 @@
 import crypto from "node:crypto";
 import { auth } from "@rms-modern/auth";
-import { type AppDB, db } from "@rms-modern/db";
-import {
-  tournamentResources,
-  tournamentResourceTypes,
-} from "@rms-modern/db/schema/organization";
-import { and, eq } from "drizzle-orm";
+import { prisma } from "../../lib/prisma";
 import { type Context, Hono } from "hono";
 import { z } from "zod";
 
@@ -13,6 +8,8 @@ import { tournamentResourceSchema } from "./schemas";
 import { getTournamentByIdentifier } from "./utils";
 
 const resourcesRoute = new Hono();
+
+const tournamentResourceTypes = ["DOCUMENT", "LAW", "MANUAL", "TUTORIAL", "OTHER"] as const;
 
 function ensureAdmin(
   session: Awaited<ReturnType<typeof auth.api.getSession>> | null
@@ -38,10 +35,9 @@ resourcesRoute.get("/:tournamentId/resources", async (c: Context) => {
       return c.json({ error: "Tournament not found" }, 404);
     }
 
-    const resources = await (db as AppDB)
-      .select()
-      .from(tournamentResources)
-      .where(eq(tournamentResources.tournamentId, tournament.id));
+    const resources = await prisma.tournamentResource.findMany({
+      where: { tournamentId: tournament.id },
+    });
 
     return c.json(resources);
   } catch (error) {
@@ -67,18 +63,18 @@ resourcesRoute.post("/:tournamentId/resources", async (c: Context) => {
       return c.json({ error: "Tournament not found" }, 404);
     }
 
-    const newResource = {
-      id: crypto.randomUUID(),
-      tournamentId: tournament.id,
-      type: body.type,
-      title: body.title, // Changed from name to title
-      url: body.url,
-      description: body.description,
-    };
+    const created = await prisma.tournamentResource.create({
+      data: {
+        id: crypto.randomUUID(),
+        tournamentId: tournament.id,
+        type: body.type,
+        title: body.title,
+        url: body.url,
+        description: body.description,
+      },
+    });
 
-    await (db as AppDB).insert(tournamentResources).values(newResource);
-
-    return c.json(newResource, 201);
+    return c.json(created, 201);
   } catch (error) {
     console.error("Failed to create resource:", error);
     if (error instanceof z.ZodError) {
@@ -106,42 +102,27 @@ resourcesRoute.patch(
       const body = tournamentResourceSchema.partial().parse(await c.req.json());
 
       const tournament = await getTournamentByIdentifier(tournamentId);
-      if (!tournament) {
-        return c.json({ error: "Tournament not found" }, 404);
-      }
+      if (!tournament) return c.json({ error: "Tournament not found" }, 404);
 
-      const existingResource = await (db as AppDB)
-        .select()
-        .from(tournamentResources)
-        .where(
-          and(
-            eq(tournamentResources.tournamentId, tournament.id),
-            eq(tournamentResources.id, resourceId)
-          )
-        )
-        .limit(1);
+      const existing = await prisma.tournamentResource.findFirst({
+        where: { id: resourceId, tournamentId: tournament.id },
+      });
+      if (!existing) return c.json({ error: "Resource not found" }, 404);
 
-      if (!existingResource.length) {
-        return c.json({ error: "Resource not found" }, 404);
-      }
+      const updated = await prisma.tournamentResource.update({
+        where: { id: resourceId },
+        data: {
+          title: body.title ?? undefined,
+          url: body.url ?? undefined,
+          description: body.description ?? undefined,
+          type: (body.type as any) ?? undefined,
+        },
+      });
 
-      await (db as AppDB)
-        .update(tournamentResources)
-        .set(body)
-        .where(eq(tournamentResources.id, resourceId));
-
-      const updatedResource = await (db as AppDB)
-        .select()
-        .from(tournamentResources)
-        .where(eq(tournamentResources.id, resourceId))
-        .limit(1);
-
-      return c.json(updatedResource[0]);
+      return c.json(updated);
     } catch (error) {
       console.error("Failed to update resource:", error);
-      if (error instanceof z.ZodError) {
-        return c.json({ error: error.flatten() }, 422);
-      }
+      if (error instanceof z.ZodError) return c.json({ error: error.flatten() }, 422);
       return c.json({ error: "Unable to update resource" }, 500);
     }
   }
@@ -168,14 +149,9 @@ resourcesRoute.delete(
         return c.json({ error: "Tournament not found" }, 404);
       }
 
-      await (db as AppDB)
-        .delete(tournamentResources)
-        .where(
-          and(
-            eq(tournamentResources.tournamentId, tournament.id),
-            eq(tournamentResources.id, resourceId)
-          )
-        );
+      await prisma.tournamentResource.deleteMany({
+        where: { tournamentId: tournament.id, id: resourceId },
+      });
 
       return c.json({ success: true });
     } catch (error) {

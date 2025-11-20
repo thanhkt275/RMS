@@ -1,21 +1,22 @@
-import { db } from "@rms-modern/db";
-import {
-  account,
-  allUserRoles,
-  session,
-  user as userTable,
-  userTypes,
-  verification,
-} from "@rms-modern/db/schema/auth";
-import {
-  type OrganizationStatus,
-  organizationInvitations,
-  organizationMembers,
-  organizationStatuses,
-  organizations,
-} from "@rms-modern/db/schema/organization";
+import { prisma } from "@rms-modern/prisma";
 import { type BetterAuthOptions, betterAuth, type User } from "better-auth";
-import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { prismaAdapter } from "./adapters/prisma";
+// Keep enums/constants locally to avoid Drizzle schema dependency
+const userTypes = ["REGULAR", "ORG"] as const;
+const allUserRoles = [
+  "TEAM_MENTOR",
+  "TEAM_LEADER",
+  "TEAM_MEMBER",
+  "COMMON",
+  "ADMIN",
+  "TSO",
+  "HEAD_REFEREE",
+  "SCORE_KEEPER",
+  "QUEUER",
+] as const;
+const organizationStatuses = ["DRAFT", "ACTIVE", "ARCHIVED"] as const;
+type OrganizationStatus = (typeof organizationStatuses)[number];
+
 import { admin } from "better-auth/plugins/admin";
 import { anonymous } from "better-auth/plugins/anonymous";
 import { organization as organizationPlugin } from "better-auth/plugins/organization";
@@ -25,7 +26,7 @@ import {
   ownerAc as organizationOwnerAccess,
 } from "better-auth/plugins/organization/access";
 import { username } from "better-auth/plugins/username";
-import { eq } from "drizzle-orm";
+
 import { z } from "zod";
 
 const resetPasswordWebhook = process.env.RESET_PASSWORD_WEBHOOK_URL;
@@ -340,14 +341,14 @@ function buildOrganizationInvitationUrl(invitationId: string) {
 }
 
 async function ensureMentorRole(userId: string) {
-  await db
-    .update(userTable)
-    .set({
+  await prisma.user.update({
+    where: { id: userId },
+    data: {
       role: "TEAM_MENTOR",
       updatedAt: new Date(),
       updatedBy: userId,
-    })
-    .where(eq(userTable.id, userId));
+    },
+  });
 }
 
 type OrganizationInvitationEmailInput = {
@@ -499,19 +500,17 @@ We look forward to collaborating with you!`,
 }
 
 export const auth = betterAuth<BetterAuthOptions>({
-  database: drizzleAdapter(db, {
-    provider: "sqlite",
-
+  database: prismaAdapter(prisma, {
     schema: {
-      user: userTable,
-      session,
-      account,
-      verification,
-      organization: organizations,
-      member: organizationMembers,
-      invitation: organizationInvitations,
+      user: "user",
+      session: "session",
+      account: "account",
+      verification: "verification",
+      organization: "organization",
+      member: "organization_member",
+      invitation: "organization_invitation",
     },
-  }),
+  }) as BetterAuthOptions["database"],
   trustedOrigins,
   emailVerification: {
     sendVerificationEmail: async (data) => {

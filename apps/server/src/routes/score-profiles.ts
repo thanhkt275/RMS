@@ -1,17 +1,14 @@
 import crypto from "node:crypto";
 import { type AuthUser, auth } from "@rms-modern/auth";
-import { db } from "@rms-modern/db";
-import {
-  scoreProfilePenaltyDirections,
-  scoreProfilePenaltyTargets,
-  scoreProfiles,
-  tournaments,
-} from "@rms-modern/db/schema/organization";
-import { desc, eq, sql } from "drizzle-orm";
+import { prisma, type Prisma } from "../lib/prisma";
 import { type Context, Hono } from "hono";
 import { z } from "zod";
 
 const scoreProfilesRoute = new Hono();
+
+// Inlined enums formerly from Drizzle schema
+const scoreProfilePenaltyTargets = ["SELF", "OPPONENT"] as const;
+const scoreProfilePenaltyDirections = ["ADD", "SUBTRACT"] as const;
 
 const cooperativeBonusSchema = z
   .object({
@@ -71,7 +68,8 @@ const scoreProfilePayloadSchema = z.object({
 
 const scoreProfileUpdateSchema = scoreProfilePayloadSchema.partial();
 
-type ScoreProfileDefinition = (typeof scoreProfiles.$inferSelect)["definition"];
+type ScoreProfileDefinition = z.infer<typeof scoreProfileDefinitionSchema>;
+
 type ScoreProfileRow = {
   id: string;
   name: string;
@@ -85,63 +83,65 @@ type ScoreProfileRow = {
 async function fetchScoreProfileById(
   profileId: string
 ): Promise<ScoreProfileRow | null> {
-  const rows = await db
-    .select({
-      id: scoreProfiles.id,
-      name: scoreProfiles.name,
-      description: scoreProfiles.description,
-      definition: scoreProfiles.definition,
-      createdAt: scoreProfiles.createdAt,
-      updatedAt: scoreProfiles.updatedAt,
-      usageCount: sql<number>`count(${tournaments.id})`.as("usageCount"),
-    })
-    .from(scoreProfiles)
-    .leftJoin(tournaments, eq(tournaments.scoreProfileId, scoreProfiles.id))
-    .where(eq(scoreProfiles.id, profileId))
-    .groupBy(scoreProfiles.id)
-    .limit(1);
+  const row = await prisma.scoreProfile.findUnique({
+    where: { id: profileId },
+    select: {
+      id: true,
+      name: true,
+      description: true,
+      definition: true,
+      createdAt: true,
+      updatedAt: true,
+      _count: { select: { tournaments: true } },
+    },
+  });
 
-  if (!rows[0]) {
-    return null;
-  }
+  if (!row) return null;
 
   return {
-    ...rows[0],
-    usageCount: rows[0].usageCount ?? 0,
-  } as ScoreProfileRow;
+    id: row.id,
+    name: row.name,
+    description: row.description ?? null,
+    definition: row.definition as unknown as ScoreProfileDefinition,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    usageCount: row._count.tournaments ?? 0,
+  };
 }
 
 async function fetchScoreProfiles(search?: string): Promise<ScoreProfileRow[]> {
-  const baseQuery = db
-    .select({
-      id: scoreProfiles.id,
-      name: scoreProfiles.name,
-      description: scoreProfiles.description,
-      definition: scoreProfiles.definition,
-      createdAt: scoreProfiles.createdAt,
-      updatedAt: scoreProfiles.updatedAt,
-      usageCount: sql<number>`count(${tournaments.id})`.as("usageCount"),
-    })
-    .from(scoreProfiles)
-    .leftJoin(tournaments, eq(tournaments.scoreProfileId, scoreProfiles.id));
+  const where = search
+    ? {
+        OR: [
+          { name: { contains: search, mode: "insensitive" as const } },
+          { description: { contains: search, mode: "insensitive" as const } },
+        ],
+      }
+    : undefined;
 
-  let finalQuery = baseQuery.$dynamic();
+  const rows = await prisma.scoreProfile.findMany({
+    where,
+    select: {
+      id: true,
+      name: true,
+      description: true,
+      definition: true,
+      createdAt: true,
+      updatedAt: true,
+      _count: { select: { tournaments: true } },
+    },
+    orderBy: { updatedAt: "desc" },
+  });
 
-  if (search) {
-    const value = `%${search}%`;
-    finalQuery = finalQuery.where(
-      sql`lower(${scoreProfiles.name}) like ${value} or lower(${scoreProfiles.description}) like ${value}`
-    );
-  }
-
-  const rows = await finalQuery
-    .groupBy(scoreProfiles.id)
-    .orderBy(desc(scoreProfiles.updatedAt));
-
-  return rows.map((row: (typeof rows)[0]) => ({
-    ...row,
-    usageCount: row.usageCount ?? 0,
-  })) as ScoreProfileRow[];
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    description: row.description ?? null,
+    definition: row.definition as unknown as ScoreProfileDefinition,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    usageCount: row._count.tournaments ?? 0,
+  }));
 }
 
 function serializeScoreProfile(profile: ScoreProfileRow) {
@@ -158,30 +158,22 @@ function serializeScoreProfile(profile: ScoreProfileRow) {
 
 async function requireAdminSession(c: Context) {
   const session = await auth.api.getSession({ headers: c.req.raw.headers });
-  if (!session) {
-    return null;
-  }
+  if (!session) return null;
   const user = session.user as AuthUser;
-  if (user.role !== "ADMIN") {
-    return null;
-  }
+  if (user.role !== "ADMIN") return null;
   return session;
 }
 
 scoreProfilesRoute.get("/", async (c: Context) => {
   try {
     const session = await requireAdminSession(c);
-    if (!session) {
-      return c.json({ error: "Forbidden" }, 403);
-    }
+    if (!session) return c.json({ error: "Forbidden" }, 403);
 
     const url = new URL(c.req.url, "http://localhost");
     const search = url.searchParams.get("search")?.trim().toLowerCase() ?? "";
 
     const profiles = await fetchScoreProfiles(search || undefined);
-    return c.json({
-      items: profiles.map(serializeScoreProfile),
-    });
+    return c.json({ items: profiles.map(serializeScoreProfile) });
   } catch (error) {
     console.error("Failed to list score profiles", error);
     return c.json({ error: "Unable to load score profiles" }, 500);
@@ -191,23 +183,20 @@ scoreProfilesRoute.get("/", async (c: Context) => {
 scoreProfilesRoute.post("/", async (c: Context) => {
   try {
     const session = await requireAdminSession(c);
-    if (!session) {
-      return c.json({ error: "Forbidden" }, 403);
-    }
+    if (!session) return c.json({ error: "Forbidden" }, 403);
 
     const payload = scoreProfilePayloadSchema.parse(await c.req.json());
     const id = crypto.randomUUID();
-    const now = new Date();
 
-    await db.insert(scoreProfiles).values({
-      id,
-      name: payload.name.trim(),
-      description: payload.description?.trim(),
-      definition: payload.definition,
-      createdBy: session.user.id,
-      updatedBy: session.user.id,
-      createdAt: now,
-      updatedAt: now,
+    await prisma.scoreProfile.create({
+      data: {
+        id,
+        name: payload.name.trim(),
+        description: payload.description?.trim(),
+        definition: payload.definition as Prisma.InputJsonValue,
+        createdBy: session.user.id,
+        updatedBy: session.user.id,
+      },
     });
 
     const profile = await fetchScoreProfileById(id);
@@ -227,15 +216,11 @@ scoreProfilesRoute.post("/", async (c: Context) => {
 scoreProfilesRoute.get("/:id", async (c: Context) => {
   try {
     const session = await requireAdminSession(c);
-    if (!session) {
-      return c.json({ error: "Forbidden" }, 403);
-    }
+    if (!session) return c.json({ error: "Forbidden" }, 403);
 
     const id = c.req.param("id");
     const profile = await fetchScoreProfileById(id);
-    if (!profile) {
-      return c.json({ error: "Score profile not found" }, 404);
-    }
+    if (!profile) return c.json({ error: "Score profile not found" }, 404);
     return c.json(serializeScoreProfile(profile));
   } catch (error) {
     console.error("Failed to fetch score profile", error);
@@ -246,15 +231,11 @@ scoreProfilesRoute.get("/:id", async (c: Context) => {
 scoreProfilesRoute.patch("/:id", async (c: Context) => {
   try {
     const session = await requireAdminSession(c);
-    if (!session) {
-      return c.json({ error: "Forbidden" }, 403);
-    }
+    if (!session) return c.json({ error: "Forbidden" }, 403);
 
     const id = c.req.param("id");
     const existing = await fetchScoreProfileById(id);
-    if (!existing) {
-      return c.json({ error: "Score profile not found" }, 404);
-    }
+    if (!existing) return c.json({ error: "Score profile not found" }, 404);
 
     const payload = scoreProfileUpdateSchema.parse(await c.req.json());
     const updates: Record<string, unknown> = {
@@ -262,23 +243,17 @@ scoreProfilesRoute.patch("/:id", async (c: Context) => {
       updatedAt: new Date(),
     };
 
-    if (payload.name) {
-      updates.name = payload.name.trim();
-    }
-    if (payload.description !== undefined) {
+    if (payload.name !== undefined) updates.name = payload.name.trim();
+    if (payload.description !== undefined)
       updates.description = payload.description?.trim() ?? null;
-    }
-    if (payload.definition) {
-      updates.definition = payload.definition;
-    }
+    if (payload.definition !== undefined)
+      updates.definition = payload.definition as Prisma.InputJsonValue;
 
-    await db.update(scoreProfiles).set(updates).where(eq(scoreProfiles.id, id));
+    await prisma.scoreProfile.update({ where: { id }, data: updates });
 
     const refreshed = await fetchScoreProfileById(id);
     return c.json(
-      refreshed
-        ? serializeScoreProfile(refreshed)
-        : serializeScoreProfile(existing)
+      refreshed ? serializeScoreProfile(refreshed) : serializeScoreProfile(existing)
     );
   } catch (error) {
     console.error("Failed to update score profile", error);
@@ -295,15 +270,11 @@ scoreProfilesRoute.patch("/:id", async (c: Context) => {
 scoreProfilesRoute.delete("/:id", async (c: Context) => {
   try {
     const session = await requireAdminSession(c);
-    if (!session) {
-      return c.json({ error: "Forbidden" }, 403);
-    }
+    if (!session) return c.json({ error: "Forbidden" }, 403);
 
     const id = c.req.param("id");
     const profile = await fetchScoreProfileById(id);
-    if (!profile) {
-      return c.json({ error: "Score profile not found" }, 404);
-    }
+    if (!profile) return c.json({ error: "Score profile not found" }, 404);
 
     if ((profile.usageCount ?? 0) > 0) {
       return c.json(
@@ -312,7 +283,7 @@ scoreProfilesRoute.delete("/:id", async (c: Context) => {
       );
     }
 
-    await db.delete(scoreProfiles).where(eq(scoreProfiles.id, id));
+    await prisma.scoreProfile.delete({ where: { id } });
     return c.json({ success: true });
   } catch (error) {
     console.error("Failed to delete score profile", error);

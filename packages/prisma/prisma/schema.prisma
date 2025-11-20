@@ -1,0 +1,592 @@
+// Prisma schema for RMS Modern migrated from Drizzle (SQLite) to PostgreSQL
+// Provider
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ========================
+// Enums (mapped from string unions)
+// ========================
+
+enum UserType {
+  REGULAR
+  ORG
+}
+
+enum AnyUserRole {
+  TEAM_MENTOR
+  TEAM_LEADER
+  TEAM_MEMBER
+  COMMON
+  ADMIN
+  TSO
+  HEAD_REFEREE
+  SCORE_KEEPER
+  QUEUER
+}
+
+enum OrganizationStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum OrganizationMemberRole {
+  TEAM_MENTOR
+  TEAM_LEADER
+  TEAM_MEMBER
+}
+
+enum OrganizationInvitationStatus {
+  pending
+  accepted
+  rejected
+  canceled
+}
+
+enum ScoreProfilePartType {
+  NUMBER
+  BOOLEAN
+}
+
+enum TournamentStatus {
+  UPCOMING
+  ONGOING
+  COMPLETED
+}
+
+enum TournamentStageStatus {
+  PENDING
+  ACTIVE
+  COMPLETED
+}
+
+enum TournamentStageType {
+  FIRST_ROUND
+  SEMI_FINAL_ROUND_ROBIN
+  FINAL_DOUBLE_ELIMINATION
+}
+
+enum MatchStatus {
+  SCHEDULED
+  READY
+  IN_PROGRESS
+  COMPLETED
+  CANCELED
+}
+
+enum MatchRobotStatus {
+  PASS
+  FAIL
+}
+
+enum MatchType {
+  NORMAL
+  SURROGATE
+}
+
+enum MatchFormat {
+  ROUND_ROBIN
+  DOUBLE_ELIMINATION
+  CUSTOM
+}
+
+enum TournamentFieldRole {
+  TSO
+  HEAD_REFEREE
+  SCORE_KEEPER
+  QUEUER
+}
+
+enum TournamentRegistrationStatus {
+  IN_PROGRESS
+  SUBMITTED
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum TournamentRegistrationStepType {
+  INFO
+  FILE_UPLOAD
+  CONSENT
+}
+
+enum TournamentRegistrationSubmissionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum FileCategory {
+  AVATAR
+  TEAM_LOGO
+  DOCUMENT
+  IMAGE
+  OTHER
+}
+
+enum TournamentResourceType {
+  DOCUMENT
+  LAW
+  MANUAL
+  TUTORIAL
+  OTHER
+}
+
+// ========================
+// Models
+// ========================
+
+model User {
+  id               String   @id @db.Text
+  name             String
+  email            String   @unique
+  emailVerified    Boolean
+  username         String?  @unique
+  displayUsername  String?
+  type             UserType   @default(REGULAR)
+  role             AnyUserRole @default(COMMON)
+  phone            String?
+  dateOfBirth      DateTime?
+  image            String?
+  banned           Boolean   @default(false)
+  isAnonymous      Boolean   @default(false)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @default(now())
+  createdBy        String?
+  updatedBy        String?
+  deletedAt        DateTime?
+
+  // Back-relations
+  sessions         Session[]
+  accounts         Account[]
+  filesUploaded    File[]
+  memberships      OrganizationMember[]
+  invitationsSent  OrganizationInvitation[]
+  organizationsCreated Organization[] @relation("OrganizationCreatedBy")
+  organizationsUpdated Organization[] @relation("OrganizationUpdatedBy")
+  scoreProfilesCreated ScoreProfile[] @relation("ScoreProfileCreatedBy")
+  scoreProfilesUpdated ScoreProfile[] @relation("ScoreProfileUpdatedBy")
+  tournamentsCreated   Tournament[]   @relation("TournamentCreatedBy")
+  tournamentsUpdated   Tournament[]   @relation("TournamentUpdatedBy")
+  fieldAssignments     TournamentFieldAssignment[]
+  participationsRegistered TournamentParticipation[] @relation("ParticipationRegisteredBy")
+  participationsConsentAccepted TournamentParticipation[] @relation("ParticipationConsentAcceptedBy")
+  registrationStepsCreated TournamentRegistrationStep[] @relation("RegistrationStepCreatedBy")
+  registrationStepsUpdated TournamentRegistrationStep[] @relation("RegistrationStepUpdatedBy")
+  registrationSubmissionsSubmitted TournamentRegistrationSubmission[] @relation("RegistrationSubmissionSubmittedBy")
+  registrationSubmissionsReviewed TournamentRegistrationSubmission[] @relation("RegistrationSubmissionReviewedBy")
+
+  @@map("user")
+}
+
+model Session {
+  id                  String   @id @db.Text
+  expiresAt           DateTime
+  token               String   @unique
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @default(now())
+  ipAddress           String?
+  userAgent           String?
+  activeOrganizationId String?
+  userId              String
+
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("session")
+}
+
+model Account {
+  id                      String   @id @db.Text
+  accountId               String
+  providerId              String
+  userId                  String
+  accessToken             String?
+  refreshToken            String?
+  idToken                 String?
+  accessTokenExpiresAt    DateTime?
+  refreshTokenExpiresAt   DateTime?
+  scope                   String?
+  password                String?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @default(now())
+
+  user                    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id @db.Text
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime?
+  updatedAt  DateTime?
+
+  @@map("verification")
+}
+
+model File {
+  id            String   @id @db.Text
+  originalName  String
+  fileName      String
+  filePath      String
+  publicUrl     String
+  mimeType      String
+  size          Int
+  width         Int?
+  height        Int?
+  thumbnailPath String?
+  thumbnailUrl  String?
+  category      FileCategory @default(OTHER)
+  uploadedBy    String
+  relatedEntityId   String?
+  relatedEntityType String?
+  metadata      Json?
+  createdAt     DateTime @default(now())
+  deletedAt     DateTime?
+
+  uploader      User    @relation(fields: [uploadedBy], references: [id], onDelete: Cascade)
+
+  @@map("file")
+}
+
+model Organization {
+  id          String   @id @db.Text
+  name        String
+  slug        String   @unique
+  logo        String?
+  coverImage  String?
+  description String?
+  location    String?
+  teamNumber  String?
+  status      OrganizationStatus @default(ACTIVE)
+  metadata    Json?
+  createdBy   String?
+  updatedBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now())
+
+  createdByUser User? @relation("OrganizationCreatedBy", fields: [createdBy], references: [id])
+  updatedByUser User? @relation("OrganizationUpdatedBy", fields: [updatedBy], references: [id])
+  members     OrganizationMember[]
+  invitations OrganizationInvitation[]
+  participations TournamentParticipation[]
+  stageTeams  TournamentStageTeam[]
+  achievements TournamentAchievement[]
+  matchesHome TournamentMatch[] @relation("HomeTeam")
+  matchesAway TournamentMatch[] @relation("AwayTeam")
+  registrationSubmissions TournamentRegistrationSubmission[]
+  stageRankings TournamentStageRanking[]
+
+  @@map("organization")
+}
+
+model OrganizationMember {
+  id             String  @id @db.Text
+  organizationId String
+  userId         String
+  role           OrganizationMemberRole @default(TEAM_MEMBER)
+  createdAt      DateTime @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId], name: "organization_member_org_user_idx")
+  @@map("organization_member")
+}
+
+model OrganizationInvitation {
+  id             String  @id @db.Text
+  organizationId String
+  email          String
+  role           OrganizationMemberRole @default(TEAM_MEMBER)
+  status         OrganizationInvitationStatus @default(pending)
+  inviterId      String
+  expiresAt      DateTime
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  inviter        User         @relation(fields: [inviterId], references: [id], onDelete: Restrict)
+
+  @@map("organization_invitation")
+}
+
+model ScoreProfile {
+  id          String   @id @db.Text
+  name        String
+  description String?
+  definition  Json
+  createdBy   String?
+  updatedBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now())
+
+  createdByUser User? @relation("ScoreProfileCreatedBy", fields: [createdBy], references: [id])
+  updatedByUser User? @relation("ScoreProfileUpdatedBy", fields: [updatedBy], references: [id])
+  tournaments   Tournament[]
+  stages        TournamentStage[]
+
+  @@map("score_profile")
+}
+
+model Tournament {
+  id           String   @id @db.Text
+  name         String
+  slug         String   @unique
+  status       TournamentStatus @default(UPCOMING)
+  season       String?
+  location     String?
+  organizer    String?
+  logo         String?
+  coverImage   String?
+  description  String?
+  announcement String?
+  fieldCount   Int      @default(1)
+  registrationDeadline DateTime?
+  startDate    DateTime?
+  endDate      DateTime?
+  metadata     Json?
+  scoreProfileId String?
+  createdBy    String?
+  updatedBy    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @default(now())
+
+  scoreProfile ScoreProfile? @relation(fields: [scoreProfileId], references: [id])
+  createdByUser User? @relation("TournamentCreatedBy", fields: [createdBy], references: [id])
+  updatedByUser User? @relation("TournamentUpdatedBy", fields: [updatedBy], references: [id])
+  stages       TournamentStage[]
+  participations TournamentParticipation[]
+  resources    TournamentResource[]
+  fieldAssignments TournamentFieldAssignment[]
+  matches      TournamentMatch[]
+  registrationSteps TournamentRegistrationStep[]
+  registrationSubmissions TournamentRegistrationSubmission[]
+  achievements TournamentAchievement[]
+
+  @@map("tournament")
+}
+
+model TournamentFieldAssignment {
+  id           String  @id @db.Text
+  tournamentId String
+  fieldNumber  Int
+  role         TournamentFieldRole
+  userId       String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @default(now())
+
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tournamentId, fieldNumber, role], name: "tournament_field_assignment_unique_idx")
+  @@map("tournament_field_assignment")
+}
+
+model TournamentResource {
+  id           String  @id @db.Text
+  tournamentId String
+  title        String
+  url          String
+  type         TournamentResourceType @default(DOCUMENT)
+  description  String?
+  createdAt    DateTime @default(now())
+
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+
+  @@map("tournament_resource")
+}
+
+model TournamentParticipation {
+  id             String  @id @db.Text
+  tournamentId   String
+  organizationId String
+  registeredBy   String?
+  status         TournamentRegistrationStatus @default(IN_PROGRESS)
+  consentAcceptedAt DateTime?
+  consentAcceptedBy String?
+  seed           Int?
+  placement      String?
+  result         String?
+  record         String?
+  notes          String?
+  createdAt      DateTime @default(now())
+
+  tournament     Tournament   @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  registeredByUser User? @relation("ParticipationRegisteredBy", fields: [registeredBy], references: [id], onDelete: SetNull)
+  consentAcceptedByUser User? @relation("ParticipationConsentAcceptedBy", fields: [consentAcceptedBy], references: [id], onDelete: SetNull)
+  submissions    TournamentRegistrationSubmission[]
+
+  @@unique([tournamentId, organizationId], name: "tournament_participation_unique_idx")
+  @@map("tournament_participation")
+}
+
+model TournamentStage {
+  id            String   @id @db.Text
+  tournamentId  String
+  name          String
+  type          TournamentStageType @default(FIRST_ROUND)
+  stageOrder    Int      @default(1)
+  status        TournamentStageStatus @default(PENDING)
+  configuration String?
+  scoreProfileId String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @default(now())
+
+  tournament    Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  scoreProfile  ScoreProfile? @relation(fields: [scoreProfileId], references: [id])
+  teams         TournamentStageTeam[]
+  matches       TournamentMatch[]
+  rankings      TournamentStageRanking[]
+
+  @@map("tournament_stage")
+}
+
+model TournamentStageTeam {
+  id             String  @id @db.Text
+  stageId        String
+  organizationId String
+  seed           Int?
+  createdAt      DateTime @default(now())
+
+  stage          TournamentStage @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([stageId, organizationId], name: "tournament_stage_team_unique_idx")
+  @@map("tournament_stage_team")
+}
+
+model TournamentRegistrationStep {
+  id           String  @id @db.Text
+  tournamentId String
+  title        String
+  description  String?
+  stepType     TournamentRegistrationStepType @default(INFO)
+  isRequired   Boolean @default(true)
+  stepOrder    Int     @default(1)
+  metadata     Json?
+  createdBy    String?
+  updatedBy    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @default(now())
+
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  createdByUser User? @relation("RegistrationStepCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
+  updatedByUser User? @relation("RegistrationStepUpdatedBy", fields: [updatedBy], references: [id], onDelete: SetNull)
+  submissions  TournamentRegistrationSubmission[]
+
+  @@map("tournament_registration_step")
+}
+
+model TournamentRegistrationSubmission {
+  id              String  @id @db.Text
+  tournamentId    String
+  participationId String
+  organizationId  String
+  stepId          String
+  status          TournamentRegistrationSubmissionStatus @default(PENDING)
+  payload         Json?
+  submittedAt     DateTime?
+  submittedBy     String?
+  reviewedAt      DateTime?
+  reviewedBy      String?
+  reviewNotes     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @default(now())
+
+  tournament      Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  participation   TournamentParticipation @relation(fields: [participationId], references: [id], onDelete: Cascade)
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  step            TournamentRegistrationStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  submittedByUser User? @relation("RegistrationSubmissionSubmittedBy", fields: [submittedBy], references: [id], onDelete: SetNull)
+  reviewedByUser  User? @relation("RegistrationSubmissionReviewedBy", fields: [reviewedBy], references: [id], onDelete: SetNull)
+
+  @@unique([participationId, stepId], name: "registration_submission_unique_idx")
+  @@map("tournament_registration_submission")
+}
+
+model TournamentStageRanking {
+  id               String  @id @db.Text
+  stageId          String
+  organizationId   String
+  rank             Int     @default(0)
+  gamesPlayed      Int     @default(0)
+  wins             Int     @default(0)
+  losses           Int     @default(0)
+  ties             Int     @default(0)
+  rankingPoints    Int     @default(0)
+  autonomousPoints Int     @default(0)
+  strengthPoints   Int     @default(0)
+  totalScore       Int     @default(0)
+  scoreData        Json?
+  loseRate         Float   @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @default(now())
+
+  stage            TournamentStage @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  organization     Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([stageId, organizationId], name: "stage_ranking_stage_team_idx")
+  @@map("tournament_stage_ranking")
+}
+
+model TournamentMatch {
+  id            String   @id @db.Text
+  tournamentId  String?
+  stageId       String?
+  round         String?
+  status        MatchStatus @default(SCHEDULED)
+  scheduledAt   DateTime?
+  homeTeamId    String?
+  awayTeamId    String?
+  homePlaceholder String?
+  awayPlaceholder String?
+  metadata      Json?
+  robotStatus   MatchRobotStatus?
+  homeRobotStatus MatchRobotStatus?
+  homeRobotNotes String?
+  awayRobotStatus MatchRobotStatus?
+  awayRobotNotes String?
+  matchType     MatchType @default(NORMAL)
+  format        MatchFormat?
+  homeScore     Int?
+  awayScore     Int?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @default(now())
+
+  tournament    Tournament? @relation(fields: [tournamentId], references: [id], onDelete: SetNull)
+  stage         TournamentStage? @relation(fields: [stageId], references: [id], onDelete: SetNull)
+  homeTeam      Organization? @relation("HomeTeam", fields: [homeTeamId], references: [id], onDelete: Cascade)
+  awayTeam      Organization? @relation("AwayTeam", fields: [awayTeamId], references: [id], onDelete: Cascade)
+
+  @@map("tournament_match")
+}
+
+model TournamentAchievement {
+  id             String   @id @db.Text
+  organizationId String
+  tournamentId   String?
+  title          String
+  description    String?
+  position       Int?
+  awardedAt      DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tournament     Tournament?  @relation(fields: [tournamentId], references: [id], onDelete: SetNull)
+
+  @@map("tournament_achievement")
+}

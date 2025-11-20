@@ -1,21 +1,17 @@
 import crypto from "node:crypto";
 import { auth } from "@rms-modern/auth";
-import { type AppDB, db } from "@rms-modern/db";
-import { user } from "@rms-modern/db/schema/auth";
-import type { TournamentStatus } from "@rms-modern/db/schema/organization";
-import {
-  tournamentParticipations,
-  tournamentResources,
-  tournamentStages,
-  tournaments,
-} from "@rms-modern/db/schema/organization";
-import { and, asc, count, desc, eq, inArray, like, sql } from "drizzle-orm";
+import { prisma } from "../../lib/prisma";
 import { type Context, Hono } from "hono";
 import { z } from "zod";
 import { tournamentPayloadSchema, tournamentUpdateSchema } from "./schemas";
-import { applyWhereClause, getTournamentByIdentifier } from "./utils";
+import { getTournamentByIdentifier } from "./utils";
 
 const tournamentCoreRoute = new Hono();
+
+type AccessResult = {
+  session: Awaited<ReturnType<typeof auth.api.getSession>>;
+  isAnonymous: boolean;
+};
 
 function ensureAdmin(
   session: Awaited<ReturnType<typeof auth.api.getSession>> | null
@@ -24,54 +20,41 @@ function ensureAdmin(
 > & {
   user: { role: string };
 } {
-  if (!session) {
-    throw new Error("Forbidden");
-  }
+  if (!session) throw new Error("Forbidden");
   if ((session.user as { role?: string }).role !== "ADMIN") {
     throw new Error("Forbidden");
   }
 }
-
-function buildTournamentSortClause(sortBy: string, sortDirection: string) {
-  const isDesc = sortDirection === "desc";
-  switch (sortBy) {
-    case "name":
-      return isDesc ? desc(tournaments.name) : asc(tournaments.name);
-    case "startDate":
-      return isDesc ? desc(tournaments.startDate) : asc(tournaments.startDate);
-    default:
-      return isDesc ? desc(tournaments.createdAt) : asc(tournaments.createdAt);
-  }
-}
-
-type AccessResult = {
-  session: Awaited<ReturnType<typeof auth.api.getSession>>;
-  isAnonymous: boolean;
-};
 
 async function getAccess(
   c: Context,
   allowAnonymous = false
 ): Promise<AccessResult | null> {
   const session = await auth.api.getSession({ headers: c.req.raw.headers });
-  if (!session) {
-    return null;
-  }
+  if (!session) return null;
   const isAnonymous = Boolean(
     (session.user as { isAnonymous?: boolean }).isAnonymous
   );
-  if (isAnonymous && !allowAnonymous) {
-    return null;
-  }
+  if (isAnonymous && !allowAnonymous) return null;
   return { session, isAnonymous };
+}
+
+function buildOrder(sortBy?: string, sortDirection?: string) {
+  const dir = sortDirection === "asc" ? "asc" : "desc";
+  switch (sortBy) {
+    case "name":
+      return { name: dir as "asc" | "desc" };
+    case "startDate":
+      return { startDate: dir as "asc" | "desc" };
+    default:
+      return { createdAt: dir as "asc" | "desc" };
+  }
 }
 
 tournamentCoreRoute.get("/", async (c: Context) => {
   try {
     const access = await getAccess(c, true);
-    if (!access) {
-      return c.json({ error: "Unauthorized" }, 401);
-    }
+    if (!access) return c.json({ error: "Unauthorized" }, 401);
 
     const {
       page = 1,
@@ -82,76 +65,67 @@ tournamentCoreRoute.get("/", async (c: Context) => {
       sortDirection = "desc",
     } = c.req.query();
 
-    const offset = (Number(page) - 1) * Number(pageSize);
+    const pageNum = Number(page) || 1;
+    const sizeNum = Number(pageSize) || 20;
 
-    const whereClause: Parameters<typeof applyWhereClause>[1] = [];
-    if (search) {
-      whereClause.push(like(tournaments.name, `%${search}%`));
+    type TournamentFindManyArgs = NonNullable<
+      Parameters<typeof prisma.tournament.findMany>[0]
+    >;
+    const where: TournamentFindManyArgs["where"] = {};
+    if (search?.trim()) {
+      (where as any).name = { contains: search.trim(), mode: "insensitive" };
     }
-    if (statuses) {
-      const statusArray = statuses.split(",") as TournamentStatus[];
-      whereClause.push(inArray(tournaments.status, statusArray));
+    if (statuses?.trim()) {
+      (where as any).status = { in: statuses.split(",") };
     }
 
-    let listQuery = (db as AppDB)
-      .select({
-        id: tournaments.id,
-        name: tournaments.name,
-        slug: tournaments.slug,
-        status: tournaments.status,
-        location: tournaments.location,
-        startDate: tournaments.startDate,
-        endDate: tournaments.endDate,
-        season: tournaments.season,
-        registeredTeams: sql<number>`count(${tournamentParticipations.id})`,
-        createdAt: tournaments.createdAt,
-      })
-      .from(tournaments)
-      .leftJoin(
-        tournamentParticipations,
-        eq(tournaments.id, tournamentParticipations.tournamentId)
-      )
-      .groupBy(tournaments.id)
-      .$dynamic();
-
-    listQuery = applyWhereClause(listQuery, whereClause);
-    listQuery = listQuery.orderBy(
-      buildTournamentSortClause(sortBy, sortDirection)
-    );
-
-    const items = await listQuery.limit(Number(pageSize)).offset(offset);
-
-    let countQuery = (db as AppDB)
-      .select({ count: count(tournaments.id) })
-      .from(tournaments)
-      .$dynamic();
-
-    countQuery = applyWhereClause(countQuery, whereClause);
-
-    const totalItemsResult = await countQuery;
-    const totalItems = totalItemsResult[0]?.count ?? 0;
+    const [items, totalItems] = await Promise.all([
+      prisma.tournament.findMany({
+        where,
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          status: true,
+          location: true,
+          startDate: true,
+          endDate: true,
+          season: true,
+          createdAt: true,
+          _count: { select: { participations: true } },
+        },
+        orderBy: buildOrder(sortBy, sortDirection) as any,
+        take: sizeNum,
+        skip: (pageNum - 1) * sizeNum,
+      }),
+      prisma.tournament.count({ where }),
+    ]);
 
     return c.json({
-      items: items.map((item: (typeof items)[0]) => ({
-        ...item,
-        startDate: item.startDate?.toISOString() ?? null,
-        endDate: item.endDate?.toISOString() ?? null,
+      items: items.map((t) => ({
+        id: t.id,
+        name: t.name,
+        slug: t.slug,
+        status: t.status,
+        location: t.location,
+        startDate: t.startDate?.toISOString() ?? null,
+        endDate: t.endDate?.toISOString() ?? null,
+        season: t.season,
+        registeredTeams: t._count.participations,
+        createdAt: t.createdAt,
       })),
       pagination: {
-        page: Number(page),
-        pageSize: Number(pageSize),
+        page: pageNum,
+        pageSize: sizeNum,
         totalItems,
-        totalPages: Math.ceil(totalItems / Number(pageSize)),
-        hasMore: Number(page) * Number(pageSize) < totalItems,
+        totalPages: Math.ceil(totalItems / sizeNum),
+        hasMore: pageNum * sizeNum < totalItems,
       },
       appliedFilters: {
         search: search || null,
         statuses: statuses ? statuses.split(",") : [],
       },
-      sort: {
-        field: sortBy,
-        direction: sortDirection,
-      },
+      sort: { field: sortBy, direction: sortDirection },
     });
   } catch (error) {
     console.error("Failed to fetch tournaments:", error);
@@ -159,73 +133,50 @@ tournamentCoreRoute.get("/", async (c: Context) => {
   }
 });
 
+// Admin overview
 tournamentCoreRoute.get("/admin/overview", async (c: Context) => {
   try {
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
-    try {
-      ensureAdmin(session);
-    } catch {
-      return c.json({ error: "Forbidden" }, 403);
-    }
+    try { ensureAdmin(session); } catch { return c.json({ error: "Forbidden" }, 403); }
 
-    const totalTournaments = await (db as AppDB)
-      .select({ count: count(tournaments.id) })
-      .from(tournaments);
-    const upcomingTournaments = await (db as AppDB)
-      .select({ count: count(tournaments.id) })
-      .from(tournaments)
-      .where(eq(tournaments.status, "UPCOMING"));
-    const ongoingTournaments = await (db as AppDB)
-      .select({ count: count(tournaments.id) })
-      .from(tournaments)
-      .where(eq(tournaments.status, "ONGOING"));
-    const completedTournaments = await (db as AppDB)
-      .select({ count: count(tournaments.id) })
-      .from(tournaments)
-      .where(eq(tournaments.status, "COMPLETED"));
-
-    // Get total registrations (organizations registered for tournaments)
-    const totalRegistrations = await (db as AppDB)
-      .select({ count: count(tournamentParticipations.id) })
-      .from(tournamentParticipations);
-
-    // Get recent tournaments with registration counts
-    const recentTournaments = await (db as AppDB)
-      .select({
-        id: tournaments.id,
-        name: tournaments.name,
-        status: tournaments.status,
-        startDate: tournaments.startDate,
-        fieldCount: tournaments.fieldCount,
-        registeredTeams: count(tournamentParticipations.organizationId),
-      })
-      .from(tournaments)
-      .leftJoin(
-        tournamentParticipations,
-        eq(tournaments.id, tournamentParticipations.tournamentId)
-      )
-      .groupBy(tournaments.id)
-      .orderBy(desc(tournaments.createdAt))
-      .limit(10);
+    const [totalTournaments, upcoming, ongoing, completed, totalRegistrations, recent] =
+      await Promise.all([
+        prisma.tournament.count(),
+        prisma.tournament.count({ where: { status: "UPCOMING" } }),
+        prisma.tournament.count({ where: { status: "ONGOING" } }),
+        prisma.tournament.count({ where: { status: "COMPLETED" } }),
+        prisma.tournamentParticipation.count(),
+        prisma.tournament.findMany({
+          select: {
+            id: true,
+            name: true,
+            status: true,
+            startDate: true,
+            fieldCount: true,
+            createdAt: true,
+            _count: { select: { participations: true } },
+          },
+          orderBy: { createdAt: "desc" },
+          take: 10,
+        }),
+      ]);
 
     return c.json({
       stats: {
-        totalTournaments: totalTournaments[0]?.count ?? 0,
-        upcoming: upcomingTournaments[0]?.count ?? 0,
-        ongoing: ongoingTournaments[0]?.count ?? 0,
-        completed: completedTournaments[0]?.count ?? 0,
-        totalRegistrations: totalRegistrations[0]?.count ?? 0,
+        totalTournaments,
+        upcoming,
+        ongoing,
+        completed,
+        totalRegistrations,
       },
-      recentTournaments: recentTournaments.map(
-        (t: (typeof recentTournaments)[0]) => ({
-          id: t.id,
-          name: t.name,
-          status: t.status as TournamentStatus,
-          startDate: t.startDate?.toISOString() ?? null,
-          fieldCount: t.fieldCount ?? 1,
-          registeredTeams: Number(t.registeredTeams) ?? 0,
-        })
-      ),
+      recentTournaments: recent.map((t) => ({
+        id: t.id,
+        name: t.name,
+        status: t.status as any,
+        startDate: t.startDate?.toISOString() ?? null,
+        fieldCount: t.fieldCount ?? 1,
+        registeredTeams: t._count.participations ?? 0,
+      })),
     });
   } catch (error) {
     console.error("Failed to fetch admin overview:", error);
@@ -233,102 +184,79 @@ tournamentCoreRoute.get("/admin/overview", async (c: Context) => {
   }
 });
 
+// Admin staff listing
 tournamentCoreRoute.get("/admin/staff", async (c: Context) => {
   try {
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
-    try {
-      ensureAdmin(session);
-    } catch {
-      return c.json({ error: "Forbidden" }, 403);
-    }
+    try { ensureAdmin(session); } catch { return c.json({ error: "Forbidden" }, 403); }
 
-    const allUserRoles = [
-      "TEAM_MENTOR",
-      "TEAM_LEADER",
-      "TEAM_MEMBER",
-      "COMMON",
-      "ADMIN",
-      "TSO",
-      "HEAD_REFEREE",
-      "SCORE_KEEPER",
-      "QUEUER",
-    ] as const;
+    const staff = await prisma.user.findMany({
+      where: {
+        type: "ORG",
+        role: { in: ["ADMIN", "TSO", "HEAD_REFEREE", "SCORE_KEEPER", "QUEUER"] },
+      },
+      select: { id: true, name: true, email: true, role: true, type: true },
+      orderBy: { name: "asc" },
+    });
 
-    const staffUsers = await (db as AppDB)
-      .select({
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        type: user.type,
-      })
-      .from(user)
-      .where(
-        and(
-          eq(user.type, "ORG"),
-          inArray(
-            user.role,
-            allUserRoles.filter(
-              (
-                role
-              ): role is
-                | "ADMIN"
-                | "TSO"
-                | "HEAD_REFEREE"
-                | "SCORE_KEEPER"
-                | "QUEUER" =>
-                role === "ADMIN" ||
-                role === "TSO" ||
-                role === "HEAD_REFEREE" ||
-                role === "SCORE_KEEPER" ||
-                role === "QUEUER"
-            )
-          )
-        )
-      )
-      .orderBy(asc(user.name));
-
-    return c.json({ staff: staffUsers });
+    return c.json({ staff });
   } catch (error) {
     console.error("Failed to fetch staff users:", error);
     return c.json({ error: "Unable to fetch staff users" }, 500);
   }
 });
 
+// Create tournament
 tournamentCoreRoute.post("/", async (c: Context) => {
   try {
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
-    if (!session) {
-      return c.json({ error: "Unauthorized" }, 401);
-    }
-    try {
-      ensureAdmin(session);
-    } catch {
-      return c.json({ error: "Forbidden" }, 403);
-    }
+    if (!session) return c.json({ error: "Unauthorized" }, 401);
+    try { ensureAdmin(session); } catch { return c.json({ error: "Forbidden" }, 403); }
 
     const body = tournamentPayloadSchema.parse(await c.req.json());
-
     const tournamentId = crypto.randomUUID();
-    const slug = `${body.name
-      .toLowerCase()
-      .replace(/[^a-z0-9]/g, "-")}-${Date.now()}`;
+    const slug = `${body.name.toLowerCase().replace(/[^a-z0-9]/g, "-")}-${Date.now()}`;
 
-    await (db as AppDB).insert(tournaments).values({
-      id: tournamentId,
-      name: body.name,
-      slug,
-      status: body.status,
-      location: body.location,
-      startDate: body.startDate ? new Date(body.startDate) : null,
-      endDate: body.endDate ? new Date(body.endDate) : null,
-      season: body.season,
-      logo: body.logo,
-      coverImage: body.coverImage,
-      description: body.description,
-      fieldCount: body.fieldCount,
-      createdBy: session.user.id,
+    const now = new Date();
+    await prisma.tournament.create({
+      data: {
+        id: tournamentId,
+        name: body.name,
+        slug,
+        status: body.status,
+        location: body.location,
+        organizer: body.organizer ?? null,
+        startDate: body.startDate ? new Date(body.startDate) : null,
+        endDate: body.endDate ? new Date(body.endDate) : null,
+        season: body.season ?? null,
+        logo: body.logo ?? null,
+        coverImage: body.coverImage ?? null,
+        description: body.description ?? null,
+        announcement: body.announcement ?? null,
+        fieldCount: body.fieldCount,
+        registrationDeadline: body.registrationDeadline ? new Date(body.registrationDeadline) : null,
+        scoreProfileId: body.scoreProfileId ?? null,
+        metadata: body.resources && body.resources.length > 0 ? { resources: body.resources } : undefined,
+        createdBy: session.user.id,
+        updatedBy: session.user.id,
+        createdAt: now,
+        updatedAt: now,
+      },
     });
+
+    // Create tournament resources if provided
+    if (body.resources && body.resources.length > 0) {
+      await prisma.tournamentResource.createMany({
+        data: body.resources.map((resource) => ({
+          id: crypto.randomUUID(),
+          tournamentId,
+          title: resource.title,
+          url: resource.url,
+          type: resource.type,
+          description: resource.description ?? null,
+        })),
+      });
+    }
 
     return c.json({ id: tournamentId, slug, name: body.name }, 201);
   } catch (error) {
@@ -340,62 +268,66 @@ tournamentCoreRoute.post("/", async (c: Context) => {
   }
 });
 
+// Tournament detail
 tournamentCoreRoute.get("/:identifier", async (c: Context) => {
   try {
     const access = await getAccess(c, true);
-    if (!access) {
-      return c.json({ error: "Unauthorized" }, 401);
-    }
+    if (!access) return c.json({ error: "Unauthorized" }, 401);
 
     const { identifier } = c.req.param();
-
-    if (!identifier) {
-      return c.json({ error: "Tournament identifier is required" }, 400);
-    }
+    if (!identifier) return c.json({ error: "Tournament identifier is required" }, 400);
 
     const tournament = await getTournamentByIdentifier(identifier);
+    if (!tournament) return c.json({ error: "Tournament not found" }, 404);
 
-    if (!tournament) {
-      return c.json({ error: "Tournament not found" }, 404);
-    }
-
-    // Fetch stages for this tournament
-    const stages = await (db as AppDB).query.tournamentStages.findMany({
-      where: eq(tournamentStages.tournamentId, tournament.id),
-      orderBy: asc(tournamentStages.stageOrder),
-    });
-
-    // Fetch registered teams (participations)
-    const participations = await (
-      db as AppDB
-    ).query.tournamentParticipations.findMany({
-      where: eq(tournamentParticipations.tournamentId, tournament.id),
-      with: {
-        organization: true,
-      },
-    });
-
-    // Fetch resources
-    const resources = await (db as AppDB).query.tournamentResources.findMany({
-      where: eq(tournamentResources.tournamentId, tournament.id),
-    });
+    const [stages, participations, resources] = await Promise.all([
+      prisma.tournamentStage.findMany({
+        where: { tournamentId: tournament.id },
+        orderBy: { stageOrder: "asc" },
+        select: {
+          id: true,
+          name: true,
+          type: true,
+          status: true,
+          stageOrder: true,
+        },
+      }),
+      prisma.tournamentParticipation.findMany({
+        where: { tournamentId: tournament.id },
+        select: {
+          id: true,
+          status: true,
+          seed: true,
+          placement: true,
+          result: true,
+          record: true,
+          notes: true,
+          organization: {
+            select: { id: true, name: true, slug: true, logo: true, location: true },
+          },
+        },
+      }),
+      prisma.tournamentResource.findMany({
+        where: { tournamentId: tournament.id },
+        select: { id: true, title: true, url: true, type: true, description: true, createdAt: true },
+      }),
+    ]);
 
     return c.json({
       ...tournament,
       startDate: tournament.startDate?.toISOString() ?? null,
       endDate: tournament.endDate?.toISOString() ?? null,
-      registrationDeadline:
-        tournament.registrationDeadline?.toISOString() ?? null,
-      stages: stages.map((stage: (typeof stages)[0]) => ({
-        id: stage.id,
-        name: stage.name,
-        type: stage.type,
-        status: stage.status,
-        order: stage.stageOrder,
+      registrationDeadline: tournament.registrationDeadline?.toISOString() ?? null,
+      stages: stages.map((s) => ({
+        id: s.id,
+        name: s.name,
+        type: s.type,
+        status: s.status,
+        order: s.stageOrder,
       })),
-      participants: participations.map((p: (typeof participations)[0]) => ({
+      participants: participations.map((p) => ({
         id: p.id,
-        teamId: p.organizationId,
+        teamId: p.organization.id,
         teamName: p.organization.name,
         teamSlug: p.organization.slug,
         teamLogo: p.organization.logo,
@@ -407,7 +339,7 @@ tournamentCoreRoute.get("/:identifier", async (c: Context) => {
         record: p.record,
         notes: p.notes,
       })),
-      resources: resources.map((r: (typeof resources)[0]) => ({
+      resources: resources.map((r) => ({
         id: r.id,
         title: r.title,
         url: r.url,
@@ -423,55 +355,42 @@ tournamentCoreRoute.get("/:identifier", async (c: Context) => {
   }
 });
 
+// Update tournament
 tournamentCoreRoute.patch("/:identifier", async (c: Context) => {
   try {
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
-    if (!session) {
-      return c.json({ error: "Unauthorized" }, 401);
-    }
-    try {
-      ensureAdmin(session);
-    } catch {
-      return c.json({ error: "Forbidden" }, 403);
-    }
+    if (!session) return c.json({ error: "Unauthorized" }, 401);
+    try { ensureAdmin(session); } catch { return c.json({ error: "Forbidden" }, 403); }
 
     const { identifier } = c.req.param();
-
-    if (!identifier) {
-      return c.json({ error: "Tournament identifier is required" }, 400);
-    }
+    if (!identifier) return c.json({ error: "Tournament identifier is required" }, 400);
 
     const body = tournamentUpdateSchema.parse(await c.req.json());
+    const t = await getTournamentByIdentifier(identifier);
+    if (!t) return c.json({ error: "Tournament not found" }, 404);
 
-    const tournament = await getTournamentByIdentifier(identifier);
-    if (!tournament) {
-      return c.json({ error: "Tournament not found" }, 404);
-    }
-
-    await (db as AppDB)
-      .update(tournaments)
-      .set({
-        name: body.name,
-        status: body.status,
-        location: body.location,
-        startDate: body.startDate ? new Date(body.startDate) : null,
-        endDate: body.endDate ? new Date(body.endDate) : null,
-        season: body.season,
-        logo: body.logo,
-        coverImage: body.coverImage,
-        description: body.description,
-        fieldCount: body.fieldCount,
+    await prisma.tournament.update({
+      where: { id: t.id },
+      data: {
+        name: body.name ?? undefined,
+        status: body.status ?? undefined,
+        location: body.location ?? undefined,
+        startDate: body.startDate ? new Date(body.startDate) : undefined,
+        endDate: body.endDate ? new Date(body.endDate) : undefined,
+        season: body.season ?? undefined,
+        logo: body.logo ?? undefined,
+        coverImage: body.coverImage ?? undefined,
+        description: body.description ?? undefined,
+        fieldCount: body.fieldCount ?? undefined,
         updatedAt: new Date(),
         updatedBy: session.user.id,
-      })
-      .where(eq(tournaments.id, tournament.id));
+      },
+    });
 
     return c.json({ success: true });
   } catch (error) {
     console.error("Failed to update tournament:", error);
-    if (error instanceof z.ZodError) {
-      return c.json({ error: error.flatten() }, 422);
-    }
+    if (error instanceof z.ZodError) return c.json({ error: error.flatten() }, 422);
     return c.json({ error: "Unable to update tournament" }, 500);
   }
 });

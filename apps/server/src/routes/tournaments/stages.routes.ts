@@ -1,12 +1,5 @@
 import { auth } from "@rms-modern/auth";
-import { type AppDB, db } from "@rms-modern/db";
-import {
-  tournamentMatches,
-  tournamentStageRankings,
-  tournamentStages,
-  type tournamentStageTeams,
-} from "@rms-modern/db/schema/organization";
-import { and, asc, eq } from "drizzle-orm";
+import { prisma } from "../../lib/prisma";
 import { type Context, Hono } from "hono";
 import { z } from "zod";
 import { stagePayloadSchema, stageUpdateSchema } from "./schemas";
@@ -30,9 +23,7 @@ const stagesRoute = new Hono();
 function ensureAdmin(
   session: Awaited<ReturnType<typeof auth.api.getSession>> | null
 ): void {
-  if (!session) {
-    throw new Error("Forbidden");
-  }
+  if (!session) throw new Error("Forbidden");
   if ((session.user as { role?: string }).role !== "ADMIN") {
     throw new Error("Forbidden");
   }
@@ -51,53 +42,61 @@ function finalizeStageResponse(
 stagesRoute.get("/:tournamentId/stages", async (c: Context) => {
   try {
     const { tournamentId } = c.req.param();
-
     if (typeof tournamentId !== "string") {
       return c.json({ error: "Tournament ID is required" }, 400);
     }
 
     const tournament = await getTournamentByIdentifier(tournamentId);
-    if (!tournament) {
-      return c.json({ error: "Tournament not found" }, 404);
-    }
+    if (!tournament) return c.json({ error: "Tournament not found" }, 404);
 
-    const stages = await (db as AppDB).query.tournamentStages.findMany({
-      where: eq(tournamentStages.tournamentId, tournament.id),
-      with: {
-        teams: {
-          with: {
-            organization: true,
-          },
-        },
-      },
-      orderBy: asc(tournamentStages.stageOrder),
+    const stages = await prisma.tournamentStage.findMany({
+      where: { tournamentId: tournament.id },
+      include: { teams: { include: { organization: true } } },
+      orderBy: { stageOrder: "asc" },
     });
 
-    // Fetch matches and rankings for each stage
     const stagesWithDetails = await Promise.all(
-      stages.map(async (stage: (typeof stages)[0]) => {
+      stages.map(async (stage) => {
         const [matches, rankings] = await Promise.all([
-          (db as AppDB).query.tournamentMatches.findMany({
-            where: eq(tournamentMatches.stageId, stage.id),
-            with: {
+          prisma.tournamentMatch.findMany({
+            where: { stageId: stage.id },
+            include: {
               homeTeam: true,
               awayTeam: true,
             },
           }),
-          (db as AppDB).query.tournamentStageRankings.findMany({
-            where: eq(tournamentStageRankings.stageId, stage.id),
-            with: {
-              organization: true,
-            },
+          prisma.tournamentStageRanking.findMany({
+            where: { stageId: stage.id },
+            include: { organization: true },
           }),
         ]);
 
-        const baseStage = buildStageResponses([stage])[0];
+        const baseStage = buildStageResponses([
+          {
+            id: stage.id,
+            tournamentId: stage.tournamentId,
+            name: stage.name,
+            type: stage.type,
+            status: stage.status,
+            stageOrder: stage.stageOrder,
+            configuration: stage.configuration ?? null,
+            scoreProfileId: stage.scoreProfileId ?? null,
+            startedAt: stage.startedAt,
+            completedAt: stage.completedAt,
+            createdAt: stage.createdAt,
+            updatedAt: stage.updatedAt,
+            teams: stage.teams?.map((st) => ({
+              organizationId: st.organizationId,
+              seed: st.seed ?? null,
+              organization: st.organization,
+            })),
+          },
+        ])[0];
 
         return {
           ...baseStage,
           fieldCount: tournament.fieldCount ?? 1,
-          matches: matches.map((match: (typeof matches)[0]) => ({
+          matches: matches.map((match) => ({
             id: match.id,
             round: match.round,
             status: match.status,
@@ -119,18 +118,15 @@ stagesRoute.get("/:tournamentId/stages", async (c: Context) => {
               placeholder: match.awayPlaceholder,
               logo: match.awayTeam?.logo ?? null,
             },
-            score: {
-              home: match.homeScore,
-              away: match.awayScore,
-            },
-            metadata: match.metadata ? JSON.parse(match.metadata) : null,
+            score: { home: match.homeScore, away: match.awayScore },
+            metadata: match.metadata as any,
           })),
-          rankings: rankings.map((ranking: (typeof rankings)[0]) => ({
+          rankings: rankings.map((ranking) => ({
             teamId: ranking.organizationId,
-            name: ranking.organization.name,
-            slug: ranking.organization.slug,
-            logo: ranking.organization.logo,
-            location: ranking.organization.location,
+            name: ranking.organization?.name ?? null,
+            slug: ranking.organization?.slug ?? null,
+            logo: ranking.organization?.logo ?? null,
+            location: ranking.organization?.location ?? null,
             rank: ranking.rank,
             rankingPoints: ranking.rankingPoints,
             wins: ranking.wins,
@@ -152,35 +148,43 @@ stagesRoute.get("/:tournamentId/stages", async (c: Context) => {
 stagesRoute.get("/:tournamentId/stages/:stageId", async (c: Context) => {
   try {
     const { tournamentId, stageId } = c.req.param();
-
     if (typeof tournamentId !== "string" || typeof stageId !== "string") {
       return c.json({ error: "Tournament ID and Stage ID are required" }, 400);
     }
 
     const tournament = await getTournamentByIdentifier(tournamentId);
-    if (!tournament) {
-      return c.json({ error: "Tournament not found" }, 404);
-    }
+    if (!tournament) return c.json({ error: "Tournament not found" }, 404);
 
-    const stage = await (db as AppDB).query.tournamentStages.findFirst({
-      where: and(
-        eq(tournamentStages.tournamentId, tournament.id),
-        eq(tournamentStages.id, stageId)
-      ),
-      with: {
-        teams: {
-          with: {
-            organization: true,
-          },
-        },
-      },
+    const stage = await prisma.tournamentStage.findFirst({
+      where: { id: stageId, tournamentId: tournament.id },
+      include: { teams: { include: { organization: true } } },
     });
 
-    if (!stage) {
-      return c.json({ error: "Stage not found" }, 404);
-    }
+    if (!stage) return c.json({ error: "Stage not found" }, 404);
 
-    return c.json({ stage: buildStageResponses([stage])[0] });
+    const response = buildStageResponses([
+      {
+        id: stage.id,
+        tournamentId: stage.tournamentId,
+        name: stage.name,
+        type: stage.type,
+        status: stage.status,
+        stageOrder: stage.stageOrder,
+        configuration: stage.configuration ?? null,
+        scoreProfileId: stage.scoreProfileId ?? null,
+        startedAt: stage.startedAt,
+        completedAt: stage.completedAt,
+        createdAt: stage.createdAt,
+        updatedAt: stage.updatedAt,
+        teams: stage.teams?.map((st) => ({
+          organizationId: st.organizationId,
+          seed: st.seed ?? null,
+          organization: st.organization,
+        })),
+      },
+    ])[0];
+
+    return c.json({ stage: response });
   } catch (error) {
     console.error("Failed to fetch stage:", error);
     return c.json({ error: "Unable to fetch stage" }, 500);
@@ -190,35 +194,39 @@ stagesRoute.get("/:tournamentId/stages/:stageId", async (c: Context) => {
 stagesRoute.post("/:tournamentId/stages", async (c: Context) => {
   try {
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
-    try {
-      await ensureAdmin(session);
-    } catch {
-      return c.json({ error: "Forbidden" }, 403);
-    }
+    try { ensureAdmin(session); } catch { return c.json({ error: "Forbidden" }, 403); }
 
     const { tournamentId } = c.req.param();
-
-    if (typeof tournamentId !== "string") {
-      return c.json({ error: "Tournament ID is required" }, 400);
-    }
+    if (typeof tournamentId !== "string") return c.json({ error: "Tournament ID is required" }, 400);
 
     const body = stagePayloadSchema.parse(await c.req.json());
 
     const tournament = await getTournamentByIdentifier(tournamentId);
-    if (!tournament) {
-      return c.json({ error: "Tournament not found" }, 404);
-    }
+    if (!tournament) return c.json({ error: "Tournament not found" }, 404);
 
     const newStage = createStageEntity(tournament.id, body);
 
-    await (db as AppDB).insert(tournamentStages).values(newStage);
+    await prisma.tournamentStage.create({
+      data: {
+        id: newStage.id,
+        tournamentId: newStage.tournamentId,
+        name: newStage.name,
+        type: newStage.type,
+        status: newStage.status,
+        stageOrder: newStage.stageOrder,
+        configuration: newStage.configuration,
+        scoreProfileId: newStage.scoreProfileId,
+        startedAt: newStage.startedAt,
+        completedAt: newStage.completedAt,
+        createdAt: newStage.createdAt,
+        updatedAt: newStage.updatedAt,
+      },
+    });
 
     return c.json(buildStageResponses([newStage])[0], 201);
   } catch (error) {
     console.error("Failed to create stage:", error);
-    if (error instanceof z.ZodError) {
-      return c.json({ error: error.flatten() }, 422);
-    }
+    if (error instanceof z.ZodError) return c.json({ error: error.flatten() }, 422);
     return c.json({ error: "Unable to create stage" }, 500);
   }
 });
@@ -226,14 +234,9 @@ stagesRoute.post("/:tournamentId/stages", async (c: Context) => {
 stagesRoute.patch("/:tournamentId/stages/:stageId", async (c: Context) => {
   try {
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
-    try {
-      await ensureAdmin(session);
-    } catch {
-      return c.json({ error: "Forbidden" }, 403);
-    }
+    try { ensureAdmin(session); } catch { return c.json({ error: "Forbidden" }, 403); }
 
     const { tournamentId, stageId } = c.req.param();
-
     if (typeof tournamentId !== "string" || typeof stageId !== "string") {
       return c.json({ error: "Tournament ID and Stage ID are required" }, 400);
     }
@@ -241,70 +244,62 @@ stagesRoute.patch("/:tournamentId/stages/:stageId", async (c: Context) => {
     const body = stageUpdateSchema.parse(await c.req.json());
 
     const tournament = await getTournamentByIdentifier(tournamentId);
-    if (!tournament) {
-      return c.json({ error: "Tournament not found" }, 404);
-    }
+    if (!tournament) return c.json({ error: "Tournament not found" }, 404);
 
-    const existingStage = await (db as AppDB).query.tournamentStages.findFirst({
-      where: and(
-        eq(tournamentStages.tournamentId, tournament.id),
-        eq(tournamentStages.id, stageId)
-      ),
+    const existingStage = await prisma.tournamentStage.findFirst({
+      where: { id: stageId, tournamentId: tournament.id },
     });
+    if (!existingStage) return c.json({ error: "Stage not found" }, 404);
 
-    if (!existingStage) {
-      return c.json({ error: "Stage not found" }, 404);
-    }
-
-    const updateData: Partial<typeof tournamentStages.$inferInsert> = {
+    await prisma.tournamentStage.update({
+      where: { id: stageId },
+      data: {
+        name: body.name ?? undefined,
+        type: body.type ?? undefined,
+        status: body.status ?? undefined,
+        stageOrder: body.order ?? undefined,
+        configuration:
+          body.configuration !== undefined
+            ? JSON.stringify(body.configuration)
+            : undefined,
+        scoreProfileId: body.scoreProfileId ?? undefined,
       updatedAt: new Date(),
-    };
-
-    if (body.name) {
-      updateData.name = body.name;
-    }
-    if (body.type) {
-      updateData.type = body.type;
-    }
-    if (body.status) {
-      updateData.status = body.status;
-    }
-    if (body.order !== undefined) {
-      updateData.stageOrder = body.order;
-    }
-    if (body.configuration) {
-      updateData.configuration = JSON.stringify(body.configuration);
-    }
-    if (body.scoreProfileId) {
-      updateData.scoreProfileId = body.scoreProfileId;
-    }
-
-    await (db as AppDB)
-      .update(tournamentStages)
-      .set(updateData)
-      .where(eq(tournamentStages.id, stageId));
-
-    const updatedStage = await (db as AppDB).query.tournamentStages.findFirst({
-      where: eq(tournamentStages.id, stageId),
-      with: {
-        teams: {
-          with: {
-            organization: true,
-          },
-        },
       },
     });
 
-    if (!updatedStage) {
-      return c.json({ error: "Stage not found after update" }, 404);
-    }
+    const updatedStage = await prisma.tournamentStage.findUnique({
+      where: { id: stageId },
+      include: { teams: { include: { organization: true } } },
+    });
 
-    return c.json(buildStageResponses([updatedStage])[0]);
+    if (!updatedStage) return c.json({ error: "Stage not found after update" }, 404);
+
+    return c.json(
+      buildStageResponses([
+        {
+          id: updatedStage.id,
+          tournamentId: updatedStage.tournamentId,
+          name: updatedStage.name,
+          type: updatedStage.type,
+          status: updatedStage.status,
+          stageOrder: updatedStage.stageOrder,
+          configuration: updatedStage.configuration ?? null,
+          scoreProfileId: updatedStage.scoreProfileId ?? null,
+          startedAt: updatedStage.startedAt,
+          completedAt: updatedStage.completedAt,
+          createdAt: updatedStage.createdAt,
+          updatedAt: updatedStage.updatedAt,
+          teams: updatedStage.teams?.map((st) => ({
+            organizationId: st.organizationId,
+            seed: st.seed ?? null,
+            organization: st.organization,
+          })),
+        },
+      ])[0]
+    );
   } catch (error) {
     console.error("Failed to update stage:", error);
-    if (error instanceof z.ZodError) {
-      return c.json({ error: error.flatten() }, 422);
-    }
+    if (error instanceof z.ZodError) return c.json({ error: error.flatten() }, 422);
     return c.json({ error: "Unable to update stage" }, 500);
   }
 });
@@ -312,32 +307,17 @@ stagesRoute.patch("/:tournamentId/stages/:stageId", async (c: Context) => {
 stagesRoute.delete("/:tournamentId/stages/:stageId", async (c: Context) => {
   try {
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
-    try {
-      await ensureAdmin(session);
-    } catch {
-      return c.json({ error: "Forbidden" }, 403);
-    }
+    try { ensureAdmin(session); } catch { return c.json({ error: "Forbidden" }, 403); }
 
     const { tournamentId, stageId } = c.req.param();
-
     if (typeof tournamentId !== "string" || typeof stageId !== "string") {
       return c.json({ error: "Tournament ID and Stage ID are required" }, 400);
     }
 
     const tournament = await getTournamentByIdentifier(tournamentId);
-    if (!tournament) {
-      return c.json({ error: "Tournament not found" }, 404);
-    }
+    if (!tournament) return c.json({ error: "Tournament not found" }, 404);
 
-    await (db as AppDB)
-      .delete(tournamentStages)
-      .where(
-        and(
-          eq(tournamentStages.tournamentId, tournament.id),
-          eq(tournamentStages.id, stageId)
-        )
-      );
-
+    await prisma.tournamentStage.deleteMany({ where: { id: stageId, tournamentId: tournament.id } });
     return c.json({ success: true });
   } catch (error) {
     console.error("Failed to delete stage:", error);
@@ -350,44 +330,39 @@ stagesRoute.post(
   async (c: Context): Promise<Response> => {
     try {
       const session = await auth.api.getSession({ headers: c.req.raw.headers });
-      try {
-        await ensureAdmin(session);
-      } catch {
-        return c.json({ error: "Forbidden" }, 403);
-      }
+      try { ensureAdmin(session); } catch { return c.json({ error: "Forbidden" }, 403); }
 
       const { tournamentId, stageId } = c.req.param();
-
       if (typeof tournamentId !== "string" || typeof stageId !== "string") {
-        return c.json(
-          { error: "Tournament ID and Stage ID are required" },
-          400
-        );
+        return c.json({ error: "Tournament ID and Stage ID are required" }, 400);
       }
 
       const { teamIds } = await c.req.json();
-
-      if (!Array.isArray(teamIds)) {
-        return c.json({ error: "teamIds must be an array" }, 400);
-      }
+      if (!Array.isArray(teamIds)) return c.json({ error: "teamIds must be an array" }, 400);
 
       const tournament = await getTournamentByIdentifier(tournamentId);
-      if (!tournament) {
-        return c.json({ error: "Tournament not found" }, 404);
-      }
+      if (!tournament) return c.json({ error: "Tournament not found" }, 404);
 
-      const stage = await (db as AppDB).query.tournamentStages.findFirst({
-        where: and(
-          eq(tournamentStages.tournamentId, tournament.id),
-          eq(tournamentStages.id, stageId)
-        ),
-      });
+      const stage = await prisma.tournamentStage.findFirst({ where: { id: stageId, tournamentId: tournament.id } });
+      if (!stage) return c.json({ error: "Stage not found" }, 404);
 
-      if (!stage) {
-        return c.json({ error: "Stage not found" }, 404);
-      }
-
-      await assignStageTeams(stage, teamIds);
+      await assignStageTeams(
+        {
+          id: stage.id,
+          tournamentId: stage.tournamentId,
+          name: stage.name,
+          type: stage.type,
+          status: stage.status as any,
+          stageOrder: stage.stageOrder,
+          configuration: stage.configuration ?? null,
+          scoreProfileId: stage.scoreProfileId ?? null,
+          startedAt: stage.startedAt,
+          completedAt: stage.completedAt,
+          createdAt: stage.createdAt,
+          updatedAt: stage.updatedAt,
+        },
+        teamIds
+      );
 
       return c.json({ success: true });
     } catch (error) {
@@ -402,129 +377,110 @@ stagesRoute.post(
   async (c: Context): Promise<Response> => {
     try {
       const session = await auth.api.getSession({ headers: c.req.raw.headers });
-      try {
-        ensureAdmin(session);
-      } catch {
-        return c.json({ error: "Forbidden" }, 403);
-      }
+      try { ensureAdmin(session); } catch { return c.json({ error: "Forbidden" }, 403); }
 
       const { tournamentId, stageId } = c.req.param();
-
       if (typeof tournamentId !== "string" || typeof stageId !== "string") {
-        return c.json(
-          { error: "Tournament ID and Stage ID are required" },
-          400
-        );
+        return c.json({ error: "Tournament ID and Stage ID are required" }, 400);
       }
 
       const tournament = await getTournamentByIdentifier(tournamentId);
-      if (!tournament) {
-        return c.json({ error: "Tournament not found" }, 404);
-      }
+      if (!tournament) return c.json({ error: "Tournament not found" }, 404);
 
-      const stageWithTeams = await (
-        db as AppDB
-      ).query.tournamentStages.findFirst({
-        where: and(
-          eq(tournamentStages.tournamentId, tournament.id),
-          eq(tournamentStages.id, stageId)
-        ),
-        with: {
-          teams: true,
-        },
+      const stageWithTeams = await prisma.tournamentStage.findFirst({
+        where: { id: stageId, tournamentId: tournament.id },
+        include: { teams: true },
       });
-
-      if (!stageWithTeams) {
-        return c.json({ error: "Stage not found" }, 404);
-      }
+      if (!stageWithTeams) return c.json({ error: "Stage not found" }, 404);
 
       const warnings: string[] = [];
-      enforceTeamRegenerationPolicy(stageWithTeams, warnings);
+      enforceTeamRegenerationPolicy(stageWithTeams as any, warnings);
 
-      const teamIds = stageWithTeams.teams.map(
-        (st: typeof tournamentStageTeams.$inferSelect) => st.organizationId
-      );
-
-      const stage = stageWithTeams;
+      const teamIds = stageWithTeams.teams.map((st) => st.organizationId);
 
       let generatedMatches: StageMatchSeed[];
-
       const format = parseStageConfigurationValue(
-        JSON.parse(stage.configuration || "{}"),
+        JSON.parse(stageWithTeams.configuration || "{}"),
         "format",
         "ROUND_ROBIN"
       );
 
       if (format === "ROUND_ROBIN") {
         const doubleRoundRobin = parseStageConfigurationValue(
-          JSON.parse(stage.configuration || "{}"),
+          JSON.parse(stageWithTeams.configuration || "{}"),
           "doubleRoundRobin",
           false
         );
-        ({ generatedMatches } = generateRoundRobinMatches(
-          teamIds,
-          doubleRoundRobin
-        ));
+        ({ generatedMatches } = generateRoundRobinMatches(teamIds, doubleRoundRobin));
       } else if (format === "DOUBLE_ELIMINATION") {
         ({ generatedMatches } = generateDoubleEliminationMatches(teamIds));
       } else {
         return c.json({ error: "Unsupported match format" }, 400);
       }
 
-      await db.transaction(
-        async (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
-          // Delete existing matches for the stage
-          await tx
-            .delete(tournamentMatches)
-            .where(
-              and(
-                eq(tournamentMatches.tournamentId, tournament.id),
-                eq(tournamentMatches.stageId, stageId)
-              )
-            );
-
-          // Insert new matches
+      await prisma.$transaction(async (tx) => {
+        await tx.tournamentMatch.deleteMany({ where: { tournamentId: tournament.id, stageId } });
           if (generatedMatches.length > 0) {
-            await tx.insert(tournamentMatches).values(
-              generatedMatches.map((match: (typeof generatedMatches)[0]) => ({
+          const now = new Date();
+          await tx.tournamentMatch.createMany({
+            data: generatedMatches.map((match) => ({
                 id: match.id,
                 tournamentId: tournament.id,
                 stageId,
                 round: match.round,
-                status: match.status || "SCHEDULED", // Use status from metadata or default
-                matchType: match.matchType,
-                format: match.format,
+              status: (match.status as any) || "SCHEDULED",
+              scheduledAt: null,
+              matchType: match.matchType as any,
+              format: match.format as any,
                 homeTeamId: match.homeTeamId,
                 awayTeamId: match.awayTeamId,
                 homePlaceholder: match.homePlaceholder,
                 awayPlaceholder: match.awayPlaceholder,
-                metadata: JSON.stringify(match.metadata),
-              }))
-            );
+              metadata: match.metadata as any,
+              robotStatus: null,
+              homeRobotStatus: null,
+              homeRobotNotes: null,
+              awayRobotStatus: null,
+              awayRobotNotes: null,
+              homeScore: null,
+              awayScore: null,
+              createdAt: now,
+              updatedAt: now,
+            })),
+          });
           }
-        }
-      );
+      });
 
-      const updatedStage = await (db as AppDB).query.tournamentStages.findFirst(
-        {
-          where: eq(tournamentStages.id, stageId),
-          with: {
-            teams: {
-              with: {
-                organization: true,
-              },
+      const updatedStage = await prisma.tournamentStage.findUnique({
+        where: { id: stageId },
+        include: { teams: { include: { organization: true } } },
+      });
+
+      const response = updatedStage
+        ? buildStageResponses([
+            {
+              id: updatedStage.id,
+              tournamentId: updatedStage.tournamentId,
+              name: updatedStage.name,
+              type: updatedStage.type,
+              status: updatedStage.status,
+              stageOrder: updatedStage.stageOrder,
+              configuration: updatedStage.configuration ?? null,
+              scoreProfileId: updatedStage.scoreProfileId ?? null,
+              startedAt: updatedStage.startedAt,
+              completedAt: updatedStage.completedAt,
+              createdAt: updatedStage.createdAt,
+              updatedAt: updatedStage.updatedAt,
+              teams: updatedStage.teams?.map((st) => ({
+                organizationId: st.organizationId,
+                seed: st.seed ?? null,
+                organization: st.organization,
+              })),
             },
-          },
-        }
-      );
+          ])
+        : [];
 
-      return c.json(
-        finalizeStageResponse(
-          buildStageResponses(updatedStage ? [updatedStage] : []),
-          warnings
-        ),
-        201
-      );
+      return c.json(finalizeStageResponse(response, warnings), 201);
     } catch (error) {
       console.error("Failed to generate matches:", error);
       return c.json({ error: "Unable to generate matches" }, 500);
@@ -535,64 +491,60 @@ stagesRoute.post(
 stagesRoute.post("/:tournamentId/stages/:stageId/start", async (c: Context) => {
   try {
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
-    try {
-      ensureAdmin(session);
-    } catch {
-      return c.json({ error: "Forbidden" }, 403);
-    }
+    try { ensureAdmin(session); } catch { return c.json({ error: "Forbidden" }, 403); }
 
     const { tournamentId, stageId } = c.req.param();
-
     if (typeof tournamentId !== "string" || typeof stageId !== "string") {
       return c.json({ error: "Tournament ID and Stage ID are required" }, 400);
     }
 
     const tournament = await getTournamentByIdentifier(tournamentId);
-    if (!tournament) {
-      return c.json({ error: "Tournament not found" }, 404);
-    }
+    if (!tournament) return c.json({ error: "Tournament not found" }, 404);
 
-    const stageWithTeams = await (db as AppDB).query.tournamentStages.findFirst(
-      {
-        where: and(
-          eq(tournamentStages.tournamentId, tournament.id),
-          eq(tournamentStages.id, stageId)
-        ),
-        with: {
-          teams: true,
-        },
-      }
-    );
-
-    if (!stageWithTeams) {
-      return c.json({ error: "Stage not found" }, 404);
-    }
+    const stageWithTeams = await prisma.tournamentStage.findFirst({
+      where: { id: stageId, tournamentId: tournament.id },
+      include: { teams: true },
+    });
+    if (!stageWithTeams) return c.json({ error: "Stage not found" }, 404);
 
     const warnings: string[] = [];
-    await handleStageMatchPreparation(stageWithTeams, warnings);
+    await handleStageMatchPreparation(stageWithTeams as any, warnings);
 
-    await (db as AppDB)
-      .update(tournamentStages)
-      .set({ status: "ACTIVE", startedAt: new Date() })
-      .where(eq(tournamentStages.id, stageId));
-
-    const updatedStage = await (db as AppDB).query.tournamentStages.findFirst({
-      where: eq(tournamentStages.id, stageId),
-      with: {
-        teams: {
-          with: {
-            organization: true,
-          },
-        },
-      },
+    await prisma.tournamentStage.update({
+      where: { id: stageId },
+      data: { status: "ACTIVE", startedAt: new Date() },
     });
 
-    return c.json(
-      finalizeStageResponse(
-        buildStageResponses(updatedStage ? [updatedStage] : []),
-        warnings
-      )
-    );
+    const updatedStage = await prisma.tournamentStage.findUnique({
+      where: { id: stageId },
+      include: { teams: { include: { organization: true } } },
+    });
+
+    const response = updatedStage
+      ? buildStageResponses([
+          {
+            id: updatedStage.id,
+            tournamentId: updatedStage.tournamentId,
+            name: updatedStage.name,
+            type: updatedStage.type,
+            status: updatedStage.status,
+            stageOrder: updatedStage.stageOrder,
+            configuration: updatedStage.configuration ?? null,
+            scoreProfileId: updatedStage.scoreProfileId ?? null,
+            startedAt: updatedStage.startedAt,
+            completedAt: updatedStage.completedAt,
+            createdAt: updatedStage.createdAt,
+            updatedAt: updatedStage.updatedAt,
+            teams: updatedStage.teams?.map((st) => ({
+              organizationId: st.organizationId,
+              seed: st.seed ?? null,
+              organization: st.organization,
+            })),
+      },
+        ])
+      : [];
+
+    return c.json(finalizeStageResponse(response, warnings));
   } catch (error) {
     console.error("Failed to start stage:", error);
     return c.json({ error: "Unable to start stage" }, 500);
@@ -604,70 +556,62 @@ stagesRoute.post(
   async (c: Context) => {
     try {
       const session = await auth.api.getSession({ headers: c.req.raw.headers });
-      try {
-        ensureAdmin(session);
-      } catch {
-        return c.json({ error: "Forbidden" }, 403);
-      }
+      try { ensureAdmin(session); } catch { return c.json({ error: "Forbidden" }, 403); }
 
       const { tournamentId, stageId } = c.req.param();
-
       if (typeof tournamentId !== "string" || typeof stageId !== "string") {
-        return c.json(
-          { error: "Tournament ID and Stage ID are required" },
-          400
-        );
+        return c.json({ error: "Tournament ID and Stage ID are required" }, 400);
       }
 
       const tournament = await getTournamentByIdentifier(tournamentId);
-      if (!tournament) {
-        return c.json({ error: "Tournament not found" }, 404);
-      }
+      if (!tournament) return c.json({ error: "Tournament not found" }, 404);
 
-      const stage = await (db as AppDB).query.tournamentStages.findFirst({
-        where: and(
-          eq(tournamentStages.tournamentId, tournament.id),
-          eq(tournamentStages.id, stageId)
-        ),
+      const stage = await prisma.tournamentStage.findFirst({
+        where: { id: stageId, tournamentId: tournament.id },
       });
-
-      if (!stage) {
-        return c.json({ error: "Stage not found" }, 404);
-      }
+      if (!stage) return c.json({ error: "Stage not found" }, 404);
 
       const warnings: string[] = [];
-      await ensureStageIsCompletable(stage, warnings);
+      await ensureStageIsCompletable(stage as any, warnings);
 
-      await (db as AppDB).transaction(
-        async (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
-          await tx
-            .update(tournamentStages)
-            .set({ status: "COMPLETED", completedAt: new Date() })
-            .where(eq(tournamentStages.id, stageId));
-
+      await prisma.$transaction(async (tx) => {
+        await tx.tournamentStage.update({
+          where: { id: stageId },
+          data: { status: "COMPLETED", completedAt: new Date() },
+        });
           await recalculateStageRankings(tx, stage.id);
-        }
-      );
+      });
 
-      const updatedStage = await (db as AppDB).query.tournamentStages.findFirst(
-        {
-          where: eq(tournamentStages.id, stageId),
-          with: {
-            teams: {
-              with: {
-                organization: true,
-              },
+      const updatedStage = await prisma.tournamentStage.findUnique({
+        where: { id: stageId },
+        include: { teams: { include: { organization: true } } },
+      });
+
+      const response = updatedStage
+        ? buildStageResponses([
+            {
+              id: updatedStage.id,
+              tournamentId: updatedStage.tournamentId,
+              name: updatedStage.name,
+              type: updatedStage.type,
+              status: updatedStage.status,
+              stageOrder: updatedStage.stageOrder,
+              configuration: updatedStage.configuration ?? null,
+              scoreProfileId: updatedStage.scoreProfileId ?? null,
+              startedAt: updatedStage.startedAt,
+              completedAt: updatedStage.completedAt,
+              createdAt: updatedStage.createdAt,
+              updatedAt: updatedStage.updatedAt,
+              teams: updatedStage.teams?.map((st) => ({
+                organizationId: st.organizationId,
+                seed: st.seed ?? null,
+                organization: st.organization,
+              })),
             },
-          },
-        }
-      );
+          ])
+        : [];
 
-      return c.json(
-        finalizeStageResponse(
-          buildStageResponses(updatedStage ? [updatedStage] : []),
-          warnings
-        )
-      );
+      return c.json(finalizeStageResponse(response, warnings));
     } catch (error) {
       console.error("Failed to complete stage:", error);
       return c.json({ error: "Unable to complete stage" }, 500);

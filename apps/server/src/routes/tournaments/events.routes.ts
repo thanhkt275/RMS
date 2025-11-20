@@ -1,9 +1,7 @@
-import { type AppDB, db } from "@rms-modern/db";
-import { tournamentStages } from "@rms-modern/db/schema/organization";
-import { eq } from "drizzle-orm";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { type SSEStreamingApi, streamSSE } from "hono/streaming";
+import { prisma } from "../../lib/prisma";
 import { getTournamentByIdentifier } from "./utils";
 
 const eventsRoute = new Hono();
@@ -25,9 +23,7 @@ eventsRoute.get("/:tournamentId/stages/:stageId/events", async (c: Context) => {
       return c.json({ error: "Tournament not found" }, 404);
     }
 
-    const stage = await (db as AppDB).query.tournamentStages.findFirst({
-      where: eq(tournamentStages.id, stageId),
-    });
+    const stage = await prisma.tournamentStage.findFirst({ where: { id: stageId } });
 
     if (!stage) {
       return c.json({ error: "Stage not found" }, 404);

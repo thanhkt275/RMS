@@ -22,7 +22,7 @@ import {
   tournamentStageStatuses,
   tournamentStageTypes,
   tournamentStatuses,
-} from "@rms-modern/db/schema/organization";
+} from "./schemas.local";
 import { z } from "zod";
 
 export const tournamentStatusSchema = z.enum([...tournamentStatuses] as [

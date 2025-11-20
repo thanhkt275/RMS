@@ -1,8 +1,5 @@
-import { type AppDB, db } from "@rms-modern/db";
-import { tournamentStages } from "@rms-modern/db/schema/organization";
-import { and, eq } from "drizzle-orm";
 import { type Context, Hono } from "hono";
-
+import { prisma } from "../../lib/prisma";
 import {
   fetchStageLeaderboardRows,
   readStageLeaderboardOrder,
@@ -17,29 +14,18 @@ rankingsRoute.get(
   async (c: Context) => {
     try {
       const { tournamentId, stageId } = c.req.param();
-
-      if (!(tournamentId && stageId)) {
-        return c.json({ error: "Missing required parameters" }, 400);
-      }
+      if (!(tournamentId && stageId)) return c.json({ error: "Missing required parameters" }, 400);
 
       const tournament = await getTournamentByIdentifier(tournamentId);
-      if (!tournament) {
-        return c.json({ error: "Tournament not found" }, 404);
-      }
+      if (!tournament) return c.json({ error: "Tournament not found" }, 404);
 
-      const stage = await (db as AppDB).query.tournamentStages.findFirst({
-        where: and(
-          eq(tournamentStages.tournamentId, tournament.id),
-          eq(tournamentStages.id, stageId)
-        ),
+      const stage = await prisma.tournamentStage.findFirst({
+        where: { id: stageId, tournamentId: tournament.id },
       });
-
-      if (!stage) {
-        return c.json({ error: "Stage not found" }, 404);
-      }
+      if (!stage) return c.json({ error: "Stage not found" }, 404);
 
       const leaderboardRows = await fetchStageLeaderboardRows(stage.id);
-      const leaderboardOrder = readStageLeaderboardOrder(stage.configuration);
+      const leaderboardOrder = readStageLeaderboardOrder(stage.configuration ?? null);
 
       return c.json({
         stageId: stage.id,
@@ -71,30 +57,17 @@ rankingsRoute.post(
   async (c: Context) => {
     try {
       const { tournamentId, stageId } = c.req.param();
-
-      if (!(tournamentId && stageId)) {
-        return c.json({ error: "Missing required parameters" }, 400);
-      }
+      if (!(tournamentId && stageId)) return c.json({ error: "Missing required parameters" }, 400);
 
       const tournament = await getTournamentByIdentifier(tournamentId);
-      if (!tournament) {
-        return c.json({ error: "Tournament not found" }, 404);
-      }
+      if (!tournament) return c.json({ error: "Tournament not found" }, 404);
 
-      const stage = await (db as AppDB).query.tournamentStages.findFirst({
-        where: and(
-          eq(tournamentStages.tournamentId, tournament.id),
-          eq(tournamentStages.id, stageId)
-        ),
+      const stage = await prisma.tournamentStage.findFirst({
+        where: { id: stageId, tournamentId: tournament.id },
       });
+      if (!stage) return c.json({ error: "Stage not found" }, 404);
 
-      if (!stage) {
-        return c.json({ error: "Stage not found" }, 404);
-      }
-
-      // syncStageLeaderboard expects entries. I will provide an empty array for now.
       await syncStageLeaderboard(stage.id);
-
       return c.json({ success: true, message: "Leaderboard sync initiated" });
     } catch (error) {
       console.error("Failed to sync stage leaderboard:", error);

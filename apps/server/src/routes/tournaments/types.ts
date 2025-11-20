@@ -1,4 +1,3 @@
-import type * as OrganizationSchema from "@rms-modern/db/schema/organization";
 import type {
   MatchFormat,
   MatchRobotStatus,
@@ -7,7 +6,7 @@ import type {
   TournamentFieldRole,
   TournamentStageStatus,
   TournamentStageType,
-} from "@rms-modern/db/schema/organization";
+} from "./schemas.local";
 // Removed MatchScheduleMetadata as it's unused
 
 export type StageMatchDependency = {
@@ -73,7 +72,12 @@ export type StageRecordWithTeams = StageRecord & {
   }>;
 };
 
-type ScoreProfileRow = typeof OrganizationSchema.scoreProfiles.$inferSelect;
+type ScoreProfileRow = {
+  id: string;
+  name: string;
+  description: string | null;
+  definition: unknown;
+};
 
 export type ScoreProfileSummary = Pick<
   ScoreProfileRow,

@@ -1,13 +1,6 @@
 import crypto from "node:crypto";
 import { auth } from "@rms-modern/auth";
-import { type AppDB, db } from "@rms-modern/db";
-import { user } from "@rms-modern/db/schema/auth";
-import {
-  type TournamentFieldRole,
-  tournamentFieldAssignments,
-  tournamentFieldRoles,
-} from "@rms-modern/db/schema/organization";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { prisma } from "../../lib/prisma";
 import { type Context, Hono } from "hono";
 import { z } from "zod";
 import { fieldRoleUpdateSchema } from "./schemas";
@@ -19,25 +12,28 @@ import {
   normalizeFieldCount,
 } from "./utils";
 
+// Local enum mirror
+const tournamentFieldRoles = ["TSO", "HEAD_REFEREE", "SCORE_KEEPER", "QUEUER"] as const;
+type TournamentFieldRole = (typeof tournamentFieldRoles)[number];
+
 const fieldsRoute = new Hono();
 
 async function fetchTournamentFieldAssignments(
   tournamentId: string
 ): Promise<FieldAssignmentRow[]> {
-  const assignmentsRows = await (db as AppDB)
-    .select({
-      id: tournamentFieldAssignments.id,
-      fieldNumber: tournamentFieldAssignments.fieldNumber,
-      role: tournamentFieldAssignments.role,
-      userId: tournamentFieldAssignments.userId,
-      userName: user.name,
-      userEmail: user.email,
-      userRole: user.role,
-    })
-    .from(tournamentFieldAssignments)
-    .leftJoin(user, eq(user.id, tournamentFieldAssignments.userId))
-    .where(eq(tournamentFieldAssignments.tournamentId, tournamentId));
-  return assignmentsRows;
+  const assignments = await prisma.tournamentFieldAssignment.findMany({
+    where: { tournamentId },
+    include: { user: true },
+  });
+  return assignments.map((a) => ({
+    id: a.id,
+    fieldNumber: a.fieldNumber,
+    role: a.role as TournamentFieldRole,
+    userId: a.userId,
+    userName: a.user?.name ?? null,
+    userEmail: a.user?.email ?? null,
+    userRole: a.user?.role ?? null,
+  }));
 }
 
 function ensureAdmin(
@@ -55,7 +51,7 @@ fieldsRoute.get("/:identifier/field-roles", async (c: Context) => {
   try {
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
     try {
-      await ensureAdmin(session);
+      ensureAdmin(session);
     } catch {
       return c.json({ error: "Forbidden" }, 403);
     }
@@ -63,12 +59,9 @@ fieldsRoute.get("/:identifier/field-roles", async (c: Context) => {
     const identifier = c.req.param("identifier");
     const tournament = await getTournamentByIdentifier(identifier);
 
-    if (!tournament) {
-      return c.json({ error: "Tournament not found" }, 404);
-    }
+    if (!tournament) return c.json({ error: "Tournament not found" }, 404);
 
     const assignments = await fetchTournamentFieldAssignments(tournament.id);
-
     const fieldRolesData = buildFieldRolesResponse(tournament, assignments);
 
     return c.json({
@@ -136,38 +129,24 @@ async function validateAssignedUsers(
   const userIds = Array.from(
     new Set(
       [...assignmentMap.values()]
-        .flatMap((roles) =>
-          tournamentFieldRoles.map((role) => roles[role]).filter(Boolean)
-        )
-        .map((value) => value as string)
+        .flatMap((roles) => tournamentFieldRoles.map((r) => roles[r]).filter(Boolean))
+        .map((v) => v as string)
     )
   );
 
-  if (!userIds.length) {
-    return null;
-  }
+  if (!userIds.length) return null;
 
-  const staffRows = await (db as AppDB)
-    .select({
-      id: user.id,
-      type: user.type,
-      role: user.role,
-    })
-    .from(user)
-    .where(inArray(user.id, userIds));
-
-  const staffMap = new Map(staffRows.map((staff) => [staff.id, staff]));
-  for (const userId of userIds) {
-    const staff = staffMap.get(userId);
-    if (
-      !staff ||
-      staff.type !== "ORG" ||
-      !tournamentFieldRoles.includes(staff.role as TournamentFieldRole)
-    ) {
+  const staffRows = await prisma.user.findMany({
+    where: { id: { in: userIds } },
+    select: { id: true, type: true, role: true },
+  });
+  const staffMap = new Map(staffRows.map((s) => [s.id, s]));
+  for (const id of userIds) {
+    const staff = staffMap.get(id);
+    if (!staff || staff.type !== "ORG" || !tournamentFieldRoles.includes(staff.role as TournamentFieldRole)) {
       return "Assignments must reference tournament staff accounts with eligible roles.";
     }
   }
-
   return null;
 }
 
@@ -182,10 +161,7 @@ fieldsRoute.put("/:identifier/field-roles", async (c: Context) => {
 
     const identifier = c.req.param("identifier");
     const tournament = await getTournamentByIdentifier(identifier);
-
-    if (!tournament) {
-      return c.json({ error: "Tournament not found" }, 404);
-    }
+    if (!tournament) return c.json({ error: "Tournament not found" }, 404);
 
     const normalizedFieldCount = normalizeFieldCount(tournament.fieldCount);
     const assignmentMapResult = buildAssignmentMap(
@@ -198,28 +174,17 @@ fieldsRoute.put("/:identifier/field-roles", async (c: Context) => {
     }
 
     const validationError = await validateAssignedUsers(assignmentMapResult);
-    if (validationError) {
-      return c.json({ error: validationError }, 400);
-    }
+    if (validationError) return c.json({ error: validationError }, 400);
 
-    await (db as AppDB).transaction(async (tx) => {
-      await tx
-        .delete(tournamentFieldAssignments)
-        .where(eq(tournamentFieldAssignments.tournamentId, tournament.id));
+    await prisma.$transaction(async (tx) => {
+      await tx.tournamentFieldAssignment.deleteMany({ where: { tournamentId: tournament.id } });
 
-      const insertValues: Array<{
-        id: string;
-        tournamentId: string;
-        fieldNumber: number;
-        role: TournamentFieldRole;
-        userId: string;
-      }> = [];
-
+      const toInsert: Array<{ id: string; tournamentId: string; fieldNumber: number; role: TournamentFieldRole; userId: string }> = [];
       for (const [fieldNumber, roles] of assignmentMapResult.entries()) {
         for (const role of tournamentFieldRoles) {
           const assignedUser = roles[role];
           if (assignedUser) {
-            insertValues.push({
+            toInsert.push({
               id: crypto.randomUUID(),
               tournamentId: tournament.id,
               fieldNumber,
@@ -229,9 +194,8 @@ fieldsRoute.put("/:identifier/field-roles", async (c: Context) => {
           }
         }
       }
-
-      if (insertValues.length) {
-        await tx.insert(tournamentFieldAssignments).values(insertValues);
+      if (toInsert.length) {
+        await tx.tournamentFieldAssignment.createMany({ data: toInsert });
       }
     });
 
@@ -260,20 +224,15 @@ fieldsRoute.get("/:slug/field-roles/users", async (c: Context) => {
   try {
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
     try {
-      await ensureAdmin(session);
+      ensureAdmin(session);
     } catch {
       return c.json({ error: "Forbidden" }, 403);
     }
 
-    const users = await (db as AppDB)
-      .select({
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        role: user.role,
-      })
-      .from(user)
-      .orderBy(asc(user.name));
+    const users = await prisma.user.findMany({
+      select: { id: true, email: true, name: true, role: true },
+      orderBy: { name: "asc" },
+    });
 
     return c.json({ users });
   } catch (error) {
@@ -285,31 +244,18 @@ fieldsRoute.get("/:slug/field-roles/users", async (c: Context) => {
 fieldsRoute.get("/:slug/field-roles", async (c: Context) => {
   try {
     const slug = c.req.param("slug");
-    if (!slug) {
-      return c.json({ error: "Slug is required" }, 400);
-    }
+    if (!slug) return c.json({ error: "Slug is required" }, 400);
 
     const tournament = await getTournamentByIdentifier(slug);
-
-    if (!tournament) {
-      return c.json({ error: "Tournament not found" }, 404);
-    }
+    if (!tournament) return c.json({ error: "Tournament not found" }, 404);
 
     const tournamentId = tournament.id;
     const fieldCount = tournament.fieldCount;
 
-    const assignments = await (db as AppDB)
-      .select({
-        id: tournamentFieldAssignments.id,
-        fieldNumber: tournamentFieldAssignments.fieldNumber,
-        role: tournamentFieldAssignments.role,
-        userId: tournamentFieldAssignments.userId,
-        userEmail: user.email,
-        userName: user.name,
-      })
-      .from(tournamentFieldAssignments)
-      .leftJoin(user, eq(tournamentFieldAssignments.userId, user.id))
-      .where(eq(tournamentFieldAssignments.tournamentId, tournamentId));
+    const assignments = await prisma.tournamentFieldAssignment.findMany({
+      where: { tournamentId },
+      include: { user: true },
+    });
 
     return c.json({
       fieldCount,
@@ -317,11 +263,9 @@ fieldsRoute.get("/:slug/field-roles", async (c: Context) => {
         id: a.id,
         fieldNumber: a.fieldNumber,
         role: a.role,
-        user: {
-          id: a.userId,
-          email: a.userEmail,
-          name: a.userName,
-        },
+        user: a.user
+          ? { id: a.userId, email: a.user.email, name: a.user.name }
+          : null,
       })),
     });
   } catch (error) {
@@ -334,17 +278,15 @@ fieldsRoute.post("/:slug/field-roles", async (c: Context) => {
   try {
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
     try {
-      await ensureAdmin(session);
+      ensureAdmin(session);
     } catch {
       return c.json({ error: "Forbidden" }, 403);
     }
 
     const slug = c.req.param("slug");
-    if (!slug) {
-      return c.json({ error: "Slug is required" }, 400);
-    }
-    const body = await c.req.json();
+    if (!slug) return c.json({ error: "Slug is required" }, 400);
 
+    const body = await c.req.json();
     const schema = z.object({
       userId: z.string(),
       fieldNumber: z.number().int().positive(),
@@ -359,66 +301,30 @@ fieldsRoute.post("/:slug/field-roles", async (c: Context) => {
     const { userId, fieldNumber, role } = parsed.data;
 
     const tournament = await getTournamentByIdentifier(slug);
+    if (!tournament) return c.json({ error: "Tournament not found" }, 404);
 
-    if (!tournament) {
-      return c.json({ error: "Tournament not found" }, 404);
-    }
-
-    const tournamentId = tournament.id;
-
-    if (fieldNumber > tournament.fieldCount) {
+    if (fieldNumber > (tournament.fieldCount ?? 1)) {
       return c.json({ error: "Invalid field number" }, 400);
     }
 
-    // Check if user exists
-    const userExists = await (db as AppDB)
-      .select()
-      .from(user)
-      .where(eq(user.id, userId))
-      .limit(1);
+    const userExists = await prisma.user.findUnique({ where: { id: userId } });
+    if (!userExists) return c.json({ error: "User not found" }, 404);
 
-    if (userExists.length === 0) {
-      return c.json({ error: "User not found" }, 404);
+    const existing = await prisma.tournamentFieldAssignment.findFirst({
+      where: { tournamentId: tournament.id, fieldNumber, role },
+    });
+
+    if (existing) {
+      await prisma.tournamentFieldAssignment.update({
+        where: { id: existing.id },
+        data: { userId, updatedAt: new Date() },
+      });
+      return c.json({ success: true, id: existing.id });
     }
 
-    // Check if assignment already exists
-    const existing = await (db as AppDB)
-      .select()
-      .from(tournamentFieldAssignments)
-      .where(
-        and(
-          eq(tournamentFieldAssignments.tournamentId, tournamentId),
-          eq(tournamentFieldAssignments.fieldNumber, fieldNumber),
-          eq(tournamentFieldAssignments.role, role)
-        )
-      )
-      .limit(1);
-
-    if (existing.length > 0) {
-      const existingAssignment = existing[0];
-      if (!existingAssignment) {
-        return c.json({ error: "Existing assignment not found" }, 500);
-      }
-      // Update existing assignment
-      await (db as AppDB)
-        .update(tournamentFieldAssignments)
-        .set({
-          userId,
-          updatedAt: new Date(),
-        })
-        .where(eq(tournamentFieldAssignments.id, existingAssignment.id));
-
-      return c.json({ success: true, id: existingAssignment.id });
-    }
-
-    // Create new assignment
     const assignmentId = crypto.randomUUID();
-    await (db as AppDB).insert(tournamentFieldAssignments).values({
-      id: assignmentId,
-      tournamentId,
-      userId,
-      fieldNumber,
-      role,
+    await prisma.tournamentFieldAssignment.create({
+      data: { id: assignmentId, tournamentId: tournament.id, userId, fieldNumber, role },
     });
 
     return c.json({ success: true, id: assignmentId }, 201);
@@ -432,20 +338,15 @@ fieldsRoute.delete("/:slug/field-roles/:assignmentId", async (c: Context) => {
   try {
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
     try {
-      await ensureAdmin(session);
+      ensureAdmin(session);
     } catch {
       return c.json({ error: "Forbidden" }, 403);
     }
 
     const assignmentId = c.req.param("assignmentId");
-    if (!assignmentId) {
-      return c.json({ error: "Assignment ID is required" }, 400);
-    }
+    if (!assignmentId) return c.json({ error: "Assignment ID is required" }, 400);
 
-    await (db as AppDB)
-      .delete(tournamentFieldAssignments)
-      .where(eq(tournamentFieldAssignments.id, assignmentId));
-
+    await prisma.tournamentFieldAssignment.delete({ where: { id: assignmentId } });
     return c.json({ success: true });
   } catch (error) {
     console.error("Failed to delete field role assignment", error);

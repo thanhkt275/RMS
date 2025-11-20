@@ -1,17 +1,8 @@
 import { auth } from "@rms-modern/auth";
-import { type AppDB, db } from "@rms-modern/db";
-import {
-  organizations,
-  tournamentMatches,
-  tournamentStages,
-  tournamentStageTeams,
-  tournaments,
-} from "@rms-modern/db/schema/organization";
-import { and, asc, eq } from "drizzle-orm";
-import { alias } from "drizzle-orm/sqlite-core";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { z } from "zod";
+import { prisma } from "../../lib/prisma";
 import {
   checkRobotPassStatus,
   getMatchesReadyForQueuing,
@@ -36,11 +27,9 @@ import {
   parseMatchMetadata,
   propagateMatchOutcome,
 } from "./utils";
+import { Prisma } from "@rms-modern/prisma";
 
 const matchesRoute = new Hono<{ Bindings: Record<string, string> }>();
-
-const homeTeamAlias = alias(organizations, "home_team");
-const awayTeamAlias = alias(organizations, "away_team");
 
 function generateMatchesByFormat(
   format: string,
@@ -63,69 +52,55 @@ function generateMatchesByFormat(
 
 function buildMatchUpdateData(
   body: MatchUpdateInput
-): Partial<typeof tournamentMatches.$inferInsert> {
-  const updateData: Partial<typeof tournamentMatches.$inferInsert> = {
+): Prisma.TournamentMatchUncheckedUpdateInput {
+  const updateData: Prisma.TournamentMatchUncheckedUpdateInput = {
     updatedAt: new Date(),
   };
 
-  if (body.status) {
-    updateData.status = body.status;
-  }
-  if (body.scheduledAt) {
-    updateData.scheduledAt = new Date(body.scheduledAt);
-  }
-  if (body.homeScore !== undefined) {
-    updateData.homeScore = body.homeScore;
-  }
-  if (body.awayScore !== undefined) {
-    updateData.awayScore = body.awayScore;
-  }
-  if (body.homeTeamId !== undefined) {
-    updateData.homeTeamId = body.homeTeamId;
-  }
-  if (body.awayTeamId !== undefined) {
-    updateData.awayTeamId = body.awayTeamId;
-  }
+  if (body.status !== undefined) updateData.status = body.status as any;
+  if (body.scheduledAt !== undefined)
+    updateData.scheduledAt = body.scheduledAt
+      ? new Date(body.scheduledAt)
+      : null;
+  if (body.homeScore !== undefined) updateData.homeScore = body.homeScore;
+  if (body.awayScore !== undefined) updateData.awayScore = body.awayScore;
+  if (body.homeTeamId !== undefined)
+    updateData.homeTeamId = body.homeTeamId ?? null;
+  if (body.awayTeamId !== undefined)
+    updateData.awayTeamId = body.awayTeamId ?? null;
   if (body.metadata !== undefined) {
-    updateData.metadata = body.metadata ? JSON.stringify(body.metadata) : null;
+    updateData.metadata =
+      body.metadata === null
+        ? Prisma.JsonNull
+        : (body.metadata as Prisma.InputJsonValue);
   }
-  if (body.robotStatus !== undefined) {
-    updateData.robotStatus = body.robotStatus;
-  }
-  if (body.matchType !== undefined) {
-    updateData.matchType = body.matchType;
-  }
-  if (body.format !== undefined) {
-    updateData.format = body.format ?? null;
-  }
+  if (body.robotStatus !== undefined)
+    updateData.robotStatus = body.robotStatus as any;
+  if (body.matchType !== undefined) updateData.matchType = body.matchType as any;
+  if (body.format !== undefined) updateData.format = (body.format ?? null) as any;
 
   return updateData;
 }
 
 async function handleMatchUpdateTransaction(
-  typedTx: typeof db,
+  tx: Prisma.TransactionClient,
   options: {
     matchId: string;
-    updateData: Partial<typeof tournamentMatches.$inferInsert>;
+    updateData: Prisma.TournamentMatchUncheckedUpdateInput;
     body: MatchUpdateInput;
-    match: typeof tournamentMatches.$inferSelect;
+    match: NonNullable<Awaited<ReturnType<typeof prisma.tournamentMatch.findUnique>>>;
   }
 ): Promise<void> {
   const { matchId, updateData, body, match } = options;
 
-  await typedTx
-    .update(tournamentMatches)
-    .set(updateData)
-    .where(eq(tournamentMatches.id, matchId));
+  await tx.tournamentMatch.update({ where: { id: matchId }, data: updateData });
 
-  if (body.status !== "COMPLETED" || !match) {
-    return;
-  }
+  if (body.status !== "COMPLETED" || !match) return;
 
   const homeScore =
-    updateData.homeScore !== undefined ? updateData.homeScore : match.homeScore;
+    updateData.homeScore !== undefined ? (updateData.homeScore as number | null) : match.homeScore;
   const awayScore =
-    updateData.awayScore !== undefined ? updateData.awayScore : match.awayScore;
+    updateData.awayScore !== undefined ? (updateData.awayScore as number | null) : match.awayScore;
 
   if (
     homeScore === null ||
@@ -136,35 +111,22 @@ async function handleMatchUpdateTransaction(
     throw new Error("Scores cannot be null for a completed match.");
   }
 
-  await propagateMatchOutcome(typedTx, {
+  await propagateMatchOutcome(tx, {
     id: match.id,
-    stageId: match.stageId,
-    round: match.round,
+    stageId: (updateData.stageId as string | undefined) ?? match.stageId,
+    round: (updateData.round as string | undefined) ?? match.round,
     status: "COMPLETED",
-    matchType:
-      updateData.matchType !== undefined
-        ? updateData.matchType
-        : match.matchType,
-    format: updateData.format !== undefined ? updateData.format : match.format,
-    scheduledAt: updateData.scheduledAt ?? match.scheduledAt,
-    homeTeamId:
-      updateData.homeTeamId !== undefined
-        ? updateData.homeTeamId
-        : match.homeTeamId,
-    awayTeamId:
-      updateData.awayTeamId !== undefined
-        ? updateData.awayTeamId
-        : match.awayTeamId,
+    matchType: (updateData.matchType as any) ?? match.matchType,
+    format: (updateData.format as any) ?? match.format,
+    scheduledAt: (updateData.scheduledAt as Date | null | undefined) ?? match.scheduledAt,
+    homeTeamId: (updateData.homeTeamId as string | null | undefined) ?? match.homeTeamId,
+    awayTeamId: (updateData.awayTeamId as string | null | undefined) ?? match.awayTeamId,
     homePlaceholder: match.homePlaceholder,
     awayPlaceholder: match.awayPlaceholder,
     homeScore,
     awayScore,
-    metadata:
-      updateData.metadata !== undefined ? updateData.metadata : match.metadata,
-    robotStatus:
-      updateData.robotStatus !== undefined
-        ? updateData.robotStatus
-        : match.robotStatus,
+    metadata: (updateData.metadata as any) ?? match.metadata,
+    robotStatus: (updateData.robotStatus as any) ?? match.robotStatus,
     homeTeamName: null,
     homeTeamSlug: null,
     homeTeamLogo: null,
@@ -181,12 +143,8 @@ function ensureAdmin(
 > & {
   user: { role: string };
 } {
-  if (!session) {
-    throw new Error("Forbidden");
-  }
-  if ((session.user as { role?: string }).role !== "ADMIN") {
-    throw new Error("Forbidden");
-  }
+  if (!session) throw new Error("Forbidden");
+  if ((session.user as { role?: string }).role !== "ADMIN") throw new Error("Forbidden");
 }
 
 function ensureQueuerOrAdmin(
@@ -196,13 +154,9 @@ function ensureQueuerOrAdmin(
 > & {
   user: { role: string };
 } {
-  if (!session) {
-    throw new Error("Forbidden");
-  }
+  if (!session) throw new Error("Forbidden");
   const role = (session.user as { role?: string }).role;
-  if (role !== "QUEUER" && role !== "ADMIN") {
-    throw new Error("Forbidden");
-  }
+  if (role !== "QUEUER" && role !== "ADMIN") throw new Error("Forbidden");
 }
 
 matchesRoute.get(
@@ -215,55 +169,19 @@ matchesRoute.get(
       };
 
       const tournament = await getTournamentByIdentifier(tournamentId);
-      if (!tournament) {
-        return c.json({ error: "Tournament not found" }, 404);
-      }
+      if (!tournament) return c.json({ error: "Tournament not found" }, 404);
 
-      const matches = await (db as AppDB)
-        .select({
-          id: tournamentMatches.id,
-          tournamentId: tournamentMatches.tournamentId,
-          stageId: tournamentMatches.stageId,
-          round: tournamentMatches.round,
-          status: tournamentMatches.status,
-          matchType: tournamentMatches.matchType,
-          format: tournamentMatches.format,
-          scheduledAt: tournamentMatches.scheduledAt,
-          homeTeamId: tournamentMatches.homeTeamId,
-          awayTeamId: tournamentMatches.awayTeamId,
-          homePlaceholder: tournamentMatches.homePlaceholder,
-          awayPlaceholder: tournamentMatches.awayPlaceholder,
-          homeScore: tournamentMatches.homeScore,
-          awayScore: tournamentMatches.awayScore,
-          metadata: tournamentMatches.metadata,
-          robotStatus: tournamentMatches.robotStatus,
-          homeTeamName: homeTeamAlias.name,
-          homeTeamLogo: homeTeamAlias.logo,
-          awayTeamName: awayTeamAlias.name,
-          awayTeamLogo: awayTeamAlias.logo,
-        })
-        .from(tournamentMatches)
-        .leftJoin(
-          homeTeamAlias,
-          eq(tournamentMatches.homeTeamId, homeTeamAlias.id)
-        )
-        .leftJoin(
-          awayTeamAlias,
-          eq(tournamentMatches.awayTeamId, awayTeamAlias.id)
-        )
-        .where(
-          and(
-            eq(tournamentMatches.tournamentId, tournament.id),
-            eq(tournamentMatches.stageId, stageId)
-          )
-        )
-        .orderBy(
-          asc(tournamentMatches.round),
-          asc(tournamentMatches.createdAt)
-        );
+      const matches = await prisma.tournamentMatch.findMany({
+        where: { tournamentId: tournament.id, stageId },
+        include: {
+          homeTeam: { select: { name: true, logo: true } },
+          awayTeam: { select: { name: true, logo: true } },
+        },
+        orderBy: [{ round: "asc" }, { createdAt: "asc" }],
+      });
 
       return c.json(
-        matches.map((match: (typeof matches)[0]) => ({
+        matches.map((match) => ({
           id: match.id,
           tournamentId: match.tournamentId,
           stageId: match.stageId,
@@ -272,19 +190,19 @@ matchesRoute.get(
           scheduledAt: match.scheduledAt?.toISOString() ?? null,
           homeTeam: formatMatchTeam(
             match.homeTeamId,
-            match.homeTeamName,
-            match.homeTeamLogo,
+            match.homeTeam?.name ?? null,
+            match.homeTeam?.logo ?? null,
             match.homePlaceholder
           ),
           awayTeam: formatMatchTeam(
             match.awayTeamId,
-            match.awayTeamName,
-            match.awayTeamLogo,
+            match.awayTeam?.name ?? null,
+            match.awayTeam?.logo ?? null,
             match.awayPlaceholder
           ),
           homeScore: match.homeScore,
           awayScore: match.awayScore,
-          metadata: parseMatchMetadata(match.metadata),
+          metadata: parseMatchMetadata(match.metadata as any),
           matchType: match.matchType,
           format: match.format,
           robotStatus: match.robotStatus,
@@ -303,7 +221,7 @@ matchesRoute.post(
     try {
       const session = await auth.api.getSession({ headers: c.req.raw.headers });
       try {
-        await ensureAdmin(session);
+        ensureAdmin(session);
       } catch {
         return c.json({ error: "Forbidden" }, 403);
       }
@@ -315,57 +233,49 @@ matchesRoute.post(
       const body = matchGenerationSchema.parse(await c.req.json());
 
       const tournament = await getTournamentByIdentifier(tournamentId);
-      if (!tournament) {
-        return c.json({ error: "Tournament not found" }, 404);
-      }
+      if (!tournament) return c.json({ error: "Tournament not found" }, 404);
 
-      // Fetch stage teams
-      const stageTeams = await (db as AppDB)
-        .select({ id: organizations.id, name: organizations.name })
-        .from(organizations)
-        .innerJoin(
-          tournamentStageTeams,
-          eq(organizations.id, tournamentStageTeams.organizationId)
-        )
-        .where(eq(tournamentStageTeams.stageId, stageId));
-
-      const teamIds = stageTeams.map((t: { id: string; name: string }) => t.id);
+      const stageTeams = await prisma.tournamentStageTeam.findMany({
+        where: { stageId },
+        include: { organization: { select: { id: true } } },
+      });
+      const teamIds = stageTeams.map((t) => t.organizationId);
       const generatedMatches = generateMatchesByFormat(
         body.format,
         teamIds,
         body.options
       );
 
-      await (db as AppDB).transaction(async (tx: unknown) => {
-        const typedTx = tx as typeof db;
-        // Delete existing matches for the stage
-        await typedTx
-          .delete(tournamentMatches)
-          .where(
-            and(
-              eq(tournamentMatches.tournamentId, tournament.id),
-              eq(tournamentMatches.stageId, stageId)
-            )
-          );
-
-        // Insert new matches
+      await prisma.$transaction(async (tx) => {
+        await tx.tournamentMatch.deleteMany({ where: { tournamentId: tournament.id, stageId } });
         if (generatedMatches.length > 0) {
-          await typedTx.insert(tournamentMatches).values(
-            generatedMatches.map((match: (typeof generatedMatches)[0]) => ({
-              id: match.id,
+          const now = new Date();
+          await tx.tournamentMatch.createMany({
+            data: generatedMatches.map((m) => ({
+              id: m.id,
               tournamentId: tournament.id,
               stageId,
-              round: match.round,
-              status: "SCHEDULED" as const,
-              matchType: match.matchType,
-              format: match.format,
-              homeTeamId: match.homeTeamId,
-              awayTeamId: match.awayTeamId,
-              homePlaceholder: match.homePlaceholder,
-              awayPlaceholder: match.awayPlaceholder,
-              metadata: JSON.stringify(match.metadata),
-            }))
-          );
+              round: m.round,
+              status: "SCHEDULED",
+              scheduledAt: null,
+              matchType: m.matchType,
+              format: m.format,
+              homeTeamId: m.homeTeamId,
+              awayTeamId: m.awayTeamId,
+              homePlaceholder: m.homePlaceholder,
+              awayPlaceholder: m.awayPlaceholder,
+              metadata: m.metadata as any,
+              robotStatus: null,
+              homeRobotStatus: null,
+              homeRobotNotes: null,
+              awayRobotStatus: null,
+              awayRobotNotes: null,
+              homeScore: null,
+              awayScore: null,
+              createdAt: now,
+              updatedAt: now,
+            })),
+          });
         }
       });
 
@@ -389,7 +299,7 @@ matchesRoute.patch(
     try {
       const session = await auth.api.getSession({ headers: c.req.raw.headers });
       try {
-        await ensureAdmin(session);
+        ensureAdmin(session);
       } catch {
         return c.json({ error: "Forbidden" }, 403);
       }
@@ -402,30 +312,15 @@ matchesRoute.patch(
       const body = matchUpdateSchema.parse(await c.req.json());
 
       const tournament = await getTournamentByIdentifier(tournamentId);
-      if (!tournament) {
-        return c.json({ error: "Tournament not found" }, 404);
-      }
+      if (!tournament) return c.json({ error: "Tournament not found" }, 404);
 
-      const existingMatches = await (db as AppDB)
-        .select()
-        .from(tournamentMatches)
-        .where(
-          and(
-            eq(tournamentMatches.id, matchId),
-            eq(tournamentMatches.tournamentId, tournament.id),
-            eq(tournamentMatches.stageId, stageId)
-          )
-        )
-        .limit(1);
+      const match = await prisma.tournamentMatch.findFirst({
+        where: { id: matchId, tournamentId: tournament.id, stageId },
+      });
+      if (!match) return c.json({ error: "Match not found" }, 404);
 
-      if (!existingMatches.length) {
-        return c.json({ error: "Match not found" }, 404);
-      }
-
-      const match = existingMatches[0] as (typeof existingMatches)[0];
       const updateData = buildMatchUpdateData(body);
 
-      // If status is COMPLETED, ensure scores are present
       if (body.status === "COMPLETED") {
         const errors = ensureScoresForCompletion(
           body.homeScore,
@@ -433,30 +328,18 @@ matchesRoute.patch(
           body.homeTeamId,
           body.awayTeamId
         );
-        if (errors.length > 0) {
-          return c.json({ error: errors.join(", ") }, 400);
-        }
+        if (errors.length > 0) return c.json({ error: errors.join(", ") }, 400);
       }
 
-      await (db as AppDB).transaction(async (tx: unknown) => {
-        const typedTx = tx as typeof db;
-        await handleMatchUpdateTransaction(typedTx, {
-          matchId,
-          updateData,
-          body,
-          match,
-        });
+      await prisma.$transaction(async (tx) => {
+        await handleMatchUpdateTransaction(tx, { matchId, updateData, body, match });
       });
 
       return c.json({ success: true });
     } catch (error) {
       console.error("Failed to update match:", error);
-      if (error instanceof z.ZodError) {
-        return c.json({ error: error.flatten() }, 422);
-      }
-      if (error instanceof Error) {
-        return c.json({ error: error.message }, 500);
-      }
+      if (error instanceof z.ZodError) return c.json({ error: error.flatten() }, 422);
+      if (error instanceof Error) return c.json({ error: error.message }, 500);
       return c.json({ error: "Unable to update match" }, 500);
     }
   }
@@ -466,9 +349,7 @@ matchesRoute.patch(
   "/:tournamentId/stages/:stageId/matches/:matchId/inspection",
   async (c: Context) => {
     try {
-      const session = await auth.api.getSession({
-        headers: c.req.raw.headers,
-      });
+      const session = await auth.api.getSession({ headers: c.req.raw.headers });
       try {
         ensureQueuerOrAdmin(session);
       } catch {
@@ -483,49 +364,23 @@ matchesRoute.patch(
       const body = matchQueuerUpdateSchema.parse(await c.req.json());
 
       const tournament = await getTournamentByIdentifier(tournamentId);
-      if (!tournament) {
-        return c.json({ error: "Tournament not found" }, 404);
-      }
+      if (!tournament) return c.json({ error: "Tournament not found" }, 404);
 
-      const existingMatches = await (db as AppDB)
-        .select()
-        .from(tournamentMatches)
-        .where(
-          and(
-            eq(tournamentMatches.id, matchId),
-            eq(tournamentMatches.tournamentId, tournament.id),
-            eq(tournamentMatches.stageId, stageId)
-          )
-        )
-        .limit(1);
+      const match = await prisma.tournamentMatch.findFirst({
+        where: { id: matchId, tournamentId: tournament.id, stageId },
+      });
+      if (!match) return c.json({ error: "Match not found" }, 404);
 
-      if (!existingMatches.length) {
-        return c.json({ error: "Match not found" }, 404);
-      }
-
-      const updateData: Partial<typeof tournamentMatches.$inferInsert> = {
-        robotStatus: body.robotStatus,
-        updatedAt: new Date(),
-      };
-
-      if (body.status) {
-        updateData.status = body.status;
-      }
-
-      await (db as AppDB)
-        .update(tournamentMatches)
-        .set(updateData)
-        .where(eq(tournamentMatches.id, matchId));
+      await prisma.tournamentMatch.update({
+        where: { id: matchId },
+        data: { robotStatus: body.robotStatus as any, status: (body.status as any) ?? undefined, updatedAt: new Date() },
+      });
 
       return c.json({ success: true });
     } catch (error) {
       console.error("Failed to update inspection:", error);
-      if (error instanceof z.ZodError) {
-        return c.json({ error: error.flatten() }, 422);
-      }
-      if (error instanceof Error) {
-        return c.json({ error: error.message }, 500);
-      }
+      if (error instanceof z.ZodError) return c.json({ error: error.flatten() }, 422);
+      if (error instanceof Error) return c.json({ error: error.message }, 500);
       return c.json({ error: "Unable to update inspection" }, 500);
     }
   }
@@ -535,43 +390,27 @@ matchesRoute.get("/matches/:matchId", async (c: Context) => {
   try {
     const { matchId } = c.req.param() as { matchId: string };
 
-    const match = await (db as AppDB).query.tournamentMatches.findFirst({
-      where: eq(tournamentMatches.id, matchId),
+    const match = await prisma.tournamentMatch.findUnique({
+      where: { id: matchId },
     });
+    if (!match) return c.json({ error: "Match not found" }, 404);
 
-    if (!match) {
-      return c.json({ error: "Match not found" }, 404);
-    }
+    const [tournamentData, stageData, homeTeamData, awayTeamData] = await Promise.all([
+      match.tournamentId
+        ? prisma.tournament.findUnique({ where: { id: match.tournamentId } })
+        : Promise.resolve(null),
+      match.stageId
+        ? prisma.tournamentStage.findUnique({ where: { id: match.stageId } })
+        : Promise.resolve(null),
+      match.homeTeamId
+        ? prisma.organization.findUnique({ where: { id: match.homeTeamId } })
+        : Promise.resolve(null),
+      match.awayTeamId
+        ? prisma.organization.findUnique({ where: { id: match.awayTeamId } })
+        : Promise.resolve(null),
+    ]);
 
-    // Fetch tournament and stage data
-    const tournamentData = match.tournamentId
-      ? await (db as AppDB).query.tournaments.findFirst({
-          where: eq(tournaments.id, match.tournamentId),
-        })
-      : null;
-
-    const stageData = match.stageId
-      ? await (db as AppDB).query.tournamentStages.findFirst({
-          where: eq(tournamentStages.id, match.stageId),
-        })
-      : null;
-
-    const homeTeamData = match.homeTeamId
-      ? await (db as AppDB).query.organizations.findFirst({
-          where: eq(organizations.id, match.homeTeamId),
-        })
-      : null;
-
-    const awayTeamData = match.awayTeamId
-      ? await (db as AppDB).query.organizations.findFirst({
-          where: eq(organizations.id, match.awayTeamId),
-        })
-      : null;
-
-    const isMissingData = !(tournamentData && stageData);
-    if (isMissingData) {
-      return c.json({ error: "Match not found" }, 404);
-    }
+    if (!(tournamentData && stageData)) return c.json({ error: "Match not found" }, 404);
 
     return c.json({
       id: match.id,
@@ -583,7 +422,7 @@ matchesRoute.get("/matches/:matchId", async (c: Context) => {
       scheduledAt: match.scheduledAt?.toISOString() ?? null,
       homeScore: match.homeScore,
       awayScore: match.awayScore,
-      metadata: parseMatchMetadata(match.metadata),
+      metadata: parseMatchMetadata(match.metadata as any),
       home: {
         id: match.homeTeamId,
         name: homeTeamData?.name ?? null,
@@ -619,9 +458,7 @@ matchesRoute.post(
   "/:tournamentId/stages/:stageId/matches/:matchId/robot-check",
   async (c: Context) => {
     try {
-      const session = await auth.api.getSession({
-        headers: c.req.raw.headers,
-      });
+      const session = await auth.api.getSession({ headers: c.req.raw.headers });
       try {
         ensureQueuerOrAdmin(session);
       } catch {
@@ -636,51 +473,26 @@ matchesRoute.post(
       const body = matchQueuerUpdateSchema.parse(await c.req.json());
 
       const tournament = await getTournamentByIdentifier(tournamentId);
-      if (!tournament) {
-        return c.json({ error: "Tournament not found" }, 404);
-      }
+      if (!tournament) return c.json({ error: "Tournament not found" }, 404);
 
-      const existingMatches = await (db as AppDB)
-        .select()
-        .from(tournamentMatches)
-        .where(
-          and(
-            eq(tournamentMatches.id, matchId),
-            eq(tournamentMatches.tournamentId, tournament.id),
-            eq(tournamentMatches.stageId, stageId)
-          )
-        )
-        .limit(1);
+      const match = await prisma.tournamentMatch.findFirst({
+        where: { id: matchId, tournamentId: tournament.id, stageId },
+      });
+      if (!match) return c.json({ error: "Match not found" }, 404);
 
-      if (!existingMatches.length) {
-        return c.json({ error: "Match not found" }, 404);
-      }
-
-      // Check robot pass status
       const robotCheck = await checkRobotPassStatus(matchId, "", {
         passed: body.robotStatus === "PASS",
-        notes:
-          body.robotStatus === "FAIL" ? "Robot inspection failed" : undefined,
+        notes: body.robotStatus === "FAIL" ? "Robot inspection failed" : undefined,
       });
 
-      // Store robot status
       await storeMatchRobotStatus(matchId, robotCheck.status);
-
-      // Update match status based on robot check
       await updateMatchStatusBasedOnRobotCheck(matchId, robotCheck.status);
 
-      return c.json({
-        success: true,
-        robotStatus: robotCheck.status,
-      });
+      return c.json({ success: true, robotStatus: robotCheck.status });
     } catch (error) {
       console.error("Failed to check robot status:", error);
-      if (error instanceof z.ZodError) {
-        return c.json({ error: error.flatten() }, 422);
-      }
-      if (error instanceof Error) {
-        return c.json({ error: error.message }, 500);
-      }
+      if (error instanceof z.ZodError) return c.json({ error: error.flatten() }, 422);
+      if (error instanceof Error) return c.json({ error: error.message }, 500);
       return c.json({ error: "Unable to check robot status" }, 500);
     }
   }
@@ -690,9 +502,7 @@ matchesRoute.get(
   "/:tournamentId/stages/:stageId/matches-ready-for-queue",
   async (c: Context) => {
     try {
-      const session = await auth.api.getSession({
-        headers: c.req.raw.headers,
-      });
+      const session = await auth.api.getSession({ headers: c.req.raw.headers });
       try {
         ensureQueuerOrAdmin(session);
       } catch {
@@ -705,9 +515,7 @@ matchesRoute.get(
       };
 
       const tournament = await getTournamentByIdentifier(tournamentId);
-      if (!tournament) {
-        return c.json({ error: "Tournament not found" }, 404);
-      }
+      if (!tournament) return c.json({ error: "Tournament not found" }, 404);
 
       const matches = await getMatchesReadyForQueuing(tournament.id, stageId);
 
@@ -733,9 +541,7 @@ matchesRoute.patch(
   "/:tournamentId/stages/:stageId/matches/:matchId/reschedule",
   async (c: Context) => {
     try {
-      const session = await auth.api.getSession({
-        headers: c.req.raw.headers,
-      });
+      const session = await auth.api.getSession({ headers: c.req.raw.headers });
       try {
         ensureAdmin(session);
       } catch {
@@ -750,45 +556,21 @@ matchesRoute.patch(
       const body = reschedulMatchSchema.parse(await c.req.json());
 
       const tournament = await getTournamentByIdentifier(tournamentId);
-      if (!tournament) {
-        return c.json({ error: "Tournament not found" }, 404);
-      }
+      if (!tournament) return c.json({ error: "Tournament not found" }, 404);
 
-      const existingMatches = await (db as AppDB)
-        .select()
-        .from(tournamentMatches)
-        .where(
-          and(
-            eq(tournamentMatches.id, matchId),
-            eq(tournamentMatches.tournamentId, tournament.id),
-            eq(tournamentMatches.stageId, stageId)
-          )
-        )
-        .limit(1);
-
-      if (!existingMatches.length) {
-        return c.json({ error: "Match not found" }, 404);
-      }
-
-      const match = existingMatches[0] as (typeof existingMatches)[0];
-      if (match.status !== "CANCELED") {
-        return c.json(
-          { error: "Only canceled matches can be rescheduled" },
-          400
-        );
-      }
+      const match = await prisma.tournamentMatch.findFirst({
+        where: { id: matchId, tournamentId: tournament.id, stageId },
+      });
+      if (!match) return c.json({ error: "Match not found" }, 404);
+      if (match.status !== "CANCELED") return c.json({ error: "Only canceled matches can be rescheduled" }, 400);
 
       await rescheduleCanceledMatch(matchId, new Date(body.scheduledAt));
 
       return c.json({ success: true });
     } catch (error) {
       console.error("Failed to reschedule match:", error);
-      if (error instanceof z.ZodError) {
-        return c.json({ error: error.flatten() }, 422);
-      }
-      if (error instanceof Error) {
-        return c.json({ error: error.message }, 500);
-      }
+      if (error instanceof z.ZodError) return c.json({ error: error.flatten() }, 422);
+      if (error instanceof Error) return c.json({ error: error.message }, 500);
       return c.json({ error: "Unable to reschedule match" }, 500);
     }
   }

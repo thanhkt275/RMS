@@ -7,20 +7,9 @@ import {
   sendTeamMemberAddedEmail,
   sendTeamMemberWelcomeEmail,
 } from "@rms-modern/auth";
-import { db } from "@rms-modern/db";
-import { user } from "@rms-modern/db/schema/auth";
-import {
-  organizationMembers,
-  organizations,
-  tournamentAchievements,
-  tournamentMatches,
-  tournamentParticipations,
-  tournaments,
-} from "@rms-modern/db/schema/organization";
-import { and, asc, desc, eq, or, sql } from "drizzle-orm";
-import { alias } from "drizzle-orm/sqlite-core";
 import type { Context } from "hono";
 import { Hono } from "hono";
+import { prisma } from "../lib/prisma";
 import { formatS3Path, isS3Enabled, uploadFileToS3 } from "../utils/s3";
 
 const teamsRoute = new Hono();
@@ -47,9 +36,6 @@ const sanitizeFileName = (name: string): string => {
   }
   return trimmed.replace(/[^\w.-]/g, "_");
 };
-
-const homeTeamAlias = alias(organizations, "home_team");
-const awayTeamAlias = alias(organizations, "away_team");
 
 /**
  * Save team image (avatar/cover) to local filesystem (development)
@@ -185,51 +171,46 @@ teamsRoute.get("/", async (c: Context) => {
 
     const userId = session.user.id;
 
-    const teams = await db
-      .select({
-        id: organizations.id,
-        name: organizations.name,
-        slug: organizations.slug,
-        status: organizations.status,
-        logo: organizations.logo,
-        coverImage: organizations.coverImage,
-        teamNumber: organizations.teamNumber,
-        location: organizations.location,
-        description: organizations.description,
-        createdAt: organizations.createdAt,
-        memberRole: organizationMembers.role,
-        memberJoinedAt: organizationMembers.createdAt,
-      })
-      .from(organizations)
-      .leftJoin(
-        organizationMembers,
-        and(
-          eq(organizationMembers.organizationId, organizations.id),
-          eq(organizationMembers.userId, userId)
-        )
-      )
-      .limit(20);
-
-    const totalCountResult = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(organizations);
-    const totalCount = totalCountResult[0]?.count ?? 0;
+    const [teams, totalCount] = await Promise.all([
+      prisma.organization.findMany({
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          status: true,
+          logo: true,
+          coverImage: true,
+          teamNumber: true,
+          location: true,
+          description: true,
+          createdAt: true,
+          members: {
+            where: { userId },
+            select: { role: true, createdAt: true },
+            take: 1,
+          },
+        },
+        orderBy: { createdAt: "desc" },
+        take: 20,
+      }),
+      prisma.organization.count(),
+    ]);
 
     return c.json({
-      items: teams.map((team: (typeof teams)[0]) => ({
-        id: team.id,
-        name: team.name,
-        slug: team.slug,
-        status: team.status,
-        logo: team.logo,
-        coverImage: team.coverImage,
-        teamNumber: team.teamNumber,
-        location: team.location,
-        description: team.description,
-        createdAt: team.createdAt,
-        isMember: !!team.memberRole,
-        memberRole: team.memberRole,
-        memberJoinedAt: team.memberJoinedAt,
+      items: teams.map((t) => ({
+        id: t.id,
+        name: t.name,
+        slug: t.slug,
+        status: t.status,
+        logo: t.logo,
+        coverImage: t.coverImage,
+        teamNumber: t.teamNumber ?? null,
+        location: t.location ?? null,
+        description: t.description ?? null,
+        createdAt: t.createdAt,
+        isMember: t.members.length > 0,
+        memberRole: t.members[0]?.role ?? null,
+        memberJoinedAt: t.members[0]?.createdAt ?? null,
       })),
       pagination: {
         page: 1,
@@ -238,17 +219,9 @@ teamsRoute.get("/", async (c: Context) => {
         totalPages: Math.ceil(totalCount / 20),
         hasMore: false,
       },
-      appliedFilters: {
-        statuses: [],
-        search: "",
-      },
-      sort: {
-        field: "createdAt",
-        direction: "desc",
-      },
-      meta: {
-        availableStatuses: ["DRAFT", "ACTIVE", "ARCHIVED"],
-      },
+      appliedFilters: { statuses: [], search: "" },
+      sort: { field: "createdAt", direction: "desc" },
+      meta: { availableStatuses: ["DRAFT", "ACTIVE", "ARCHIVED"] },
     });
   } catch (error) {
     console.error("Error fetching teams:", error);
@@ -256,6 +229,7 @@ teamsRoute.get("/", async (c: Context) => {
   }
 });
 
+// GET /api/teams/mine - teams current user is member of
 teamsRoute.get("/mine", async (c: Context) => {
   try {
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
@@ -263,31 +237,26 @@ teamsRoute.get("/mine", async (c: Context) => {
       return c.json({ error: "Unauthorized" }, 401);
     }
 
-    const memberships = await db
-      .select({
-        id: organizations.id,
-        name: organizations.name,
-        slug: organizations.slug,
-        logo: organizations.logo,
-        memberRole: organizationMembers.role,
-        joinedAt: organizationMembers.createdAt,
-      })
-      .from(organizationMembers)
-      .innerJoin(
-        organizations,
-        eq(organizationMembers.organizationId, organizations.id)
-      )
-      .where(eq(organizationMembers.userId, session.user.id))
-      .orderBy(asc(organizations.name));
+    const items = await prisma.organizationMember.findMany({
+      where: { userId: session.user.id },
+      select: {
+        role: true,
+        createdAt: true,
+        organization: {
+          select: { id: true, name: true, slug: true, logo: true },
+        },
+      },
+      orderBy: { organization: { name: "asc" } },
+    });
 
     return c.json({
-      items: memberships.map((membership) => ({
-        id: membership.id,
-        name: membership.name,
-        slug: membership.slug,
-        logo: membership.logo,
-        role: membership.memberRole,
-        joinedAt: membership.joinedAt,
+      items: items.map((m) => ({
+        id: m.organization.id,
+        name: m.organization.name,
+        slug: m.organization.slug,
+        logo: m.organization.logo,
+        role: m.role,
+        joinedAt: m.createdAt,
       })),
     });
   } catch (error) {
@@ -307,29 +276,33 @@ teamsRoute.post("/", async (c: Context) => {
     const body = await c.req.json();
     const { name, description, location, teamNumber } = body;
 
-    // Create team directly in database
     const teamId = crypto.randomUUID();
     const slug = `${name.toLowerCase().replace(/[^a-z0-9]/g, "-")}-${Date.now()}`;
 
-    await db.insert(organizations).values({
-      id: teamId,
-      name,
-      slug,
-      description,
-      location,
-      teamNumber,
-      logo: body.logo,
-      coverImage: body.coverImage,
-      status: "ACTIVE",
-      createdBy: session.user.id,
-    });
+    await prisma.$transaction(async (tx) => {
+      await tx.organization.create({
+        data: {
+          id: teamId,
+          name,
+          slug,
+          description,
+          location,
+          teamNumber,
+          logo: body.logo,
+          coverImage: body.coverImage,
+          status: "ACTIVE",
+          createdBy: session.user.id,
+        },
+      });
 
-    // Add creator as a member
-    await db.insert(organizationMembers).values({
-      id: crypto.randomUUID(),
-      organizationId: teamId,
-      userId: session.user.id,
-      role: "TEAM_MENTOR",
+      await tx.organizationMember.create({
+        data: {
+          id: crypto.randomUUID(),
+          organizationId: teamId,
+          userId: session.user.id,
+          role: "TEAM_MENTOR",
+        },
+      });
     });
 
     return c.json({
@@ -362,182 +335,177 @@ teamsRoute.get("/:slug", async (c: Context) => {
 
     const userId = session.user.id;
 
-    const team = await db
-      .select({
-        id: organizations.id,
-        name: organizations.name,
-        slug: organizations.slug,
-        status: organizations.status,
-        logo: organizations.logo,
-        coverImage: organizations.coverImage,
-        teamNumber: organizations.teamNumber,
-        location: organizations.location,
-        description: organizations.description,
-        createdAt: organizations.createdAt,
-        memberRole: organizationMembers.role,
-        memberJoinedAt: organizationMembers.createdAt,
-      })
-      .from(organizations)
-      .leftJoin(
-        organizationMembers,
-        and(
-          eq(organizationMembers.organizationId, organizations.id),
-          eq(organizationMembers.userId, userId)
-        )
-      )
-      .where(eq(organizations.slug, slug))
-      .limit(1);
+    const team = await prisma.organization.findUnique({
+      where: { slug },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        status: true,
+        logo: true,
+        coverImage: true,
+        teamNumber: true,
+        location: true,
+        description: true,
+        createdAt: true,
+        members: {
+          where: { userId },
+          select: { role: true, createdAt: true },
+          take: 1,
+        },
+      },
+    });
 
-    if (!team.length) {
+    if (!team) {
       return c.json({ error: "Team not found" }, 404);
     }
 
-    const teamData = team[0];
-    if (!teamData) {
-      // Explicit check for teamData
-      return c.json({ error: "Team data not found" }, 404);
-    }
+    const [members, tournamentHistory, matchesRaw, achievements] =
+      await Promise.all([
+        prisma.organizationMember.findMany({
+          where: { organizationId: team.id },
+          select: {
+            id: true,
+            userId: true,
+            role: true,
+            createdAt: true,
+            user: { select: { name: true, email: true } },
+          },
+        }),
+        prisma.tournamentParticipation.findMany({
+          where: { organizationId: team.id },
+          select: {
+            id: true,
+            placement: true,
+            result: true,
+            status: true,
+            tournament: {
+              select: {
+                id: true,
+                name: true,
+                slug: true,
+                status: true,
+                location: true,
+                startDate: true,
+                endDate: true,
+                season: true,
+                createdAt: true,
+              },
+            },
+          },
+          orderBy: [
+            { tournament: { startDate: "desc" } },
+            { tournament: { createdAt: "desc" } },
+          ],
+        }),
+        prisma.tournamentMatch.findMany({
+          where: {
+            OR: [{ homeTeamId: team.id }, { awayTeamId: team.id }],
+          },
+          select: {
+            id: true,
+            tournamentId: true,
+            scheduledAt: true,
+            status: true,
+            round: true,
+            homeTeamId: true,
+            awayTeamId: true,
+            homePlaceholder: true,
+            awayPlaceholder: true,
+            homeScore: true,
+            awayScore: true,
+            tournament: { select: { name: true } },
+            homeTeam: { select: { name: true, logo: true } },
+            awayTeam: { select: { name: true, logo: true } },
+            createdAt: true,
+          },
+          orderBy: [{ scheduledAt: "desc" }, { createdAt: "desc" }],
+        }),
+        prisma.tournamentAchievement.findMany({
+          where: { organizationId: team.id },
+          select: {
+            id: true,
+            title: true,
+            description: true,
+            position: true,
+            awardedAt: true,
+            tournamentId: true,
+            tournament: { select: { name: true } },
+            createdAt: true,
+          },
+          orderBy: [{ awardedAt: "desc" }, { createdAt: "desc" }],
+        }),
+      ]);
 
-    // Get team members
-    const members = await db
-      .select({
-        id: organizationMembers.id,
-        userId: organizationMembers.userId,
-        role: organizationMembers.role,
-        joinedAt: organizationMembers.createdAt,
-        name: user.name,
-        email: user.email,
-      })
-      .from(organizationMembers)
-      .leftJoin(user, eq(organizationMembers.userId, user.id))
-      .where(eq(organizationMembers.organizationId, teamData.id));
-
-    const tournamentHistory = await db
-      .select({
-        id: tournaments.id,
-        name: tournaments.name,
-        slug: tournaments.slug,
-        status: tournaments.status,
-        location: tournaments.location,
-        startDate: tournaments.startDate,
-        endDate: tournaments.endDate,
-        season: tournaments.season,
-        placement: tournamentParticipations.placement,
-        result: tournamentParticipations.result,
-        participationId: tournamentParticipations.id,
-        registrationStatus: tournamentParticipations.status,
-      })
-      .from(tournamentParticipations)
-      .innerJoin(
-        tournaments,
-        eq(tournamentParticipations.tournamentId, tournaments.id)
+    const matches = matchesRaw.map<ReturnType<typeof mapMatchForTeam>>((m) =>
+      mapMatchForTeam(
+        {
+          id: m.id,
+          tournamentId: m.tournamentId ?? null,
+          tournamentName: m.tournament?.name ?? null,
+          scheduledAt: m.scheduledAt,
+          status: m.status,
+          round: m.round ?? null,
+          homeTeamId: m.homeTeamId ?? null,
+          awayTeamId: m.awayTeamId ?? null,
+          homePlaceholder: m.homePlaceholder ?? null,
+          awayPlaceholder: m.awayPlaceholder ?? null,
+          homeScore: m.homeScore ?? null,
+          awayScore: m.awayScore ?? null,
+          homeTeamName: m.homeTeam?.name ?? null,
+          homeTeamLogo: m.homeTeam?.logo ?? null,
+          awayTeamName: m.awayTeam?.name ?? null,
+          awayTeamLogo: m.awayTeam?.logo ?? null,
+        },
+        team.id
       )
-      .where(eq(tournamentParticipations.organizationId, teamData.id))
-      .orderBy(desc(tournaments.startDate), desc(tournaments.createdAt));
-
-    const matchesRaw: MatchRow[] = await db
-      .select({
-        id: tournamentMatches.id,
-        tournamentId: tournamentMatches.tournamentId,
-        tournamentName: tournaments.name,
-        scheduledAt: tournamentMatches.scheduledAt,
-        status: tournamentMatches.status,
-        round: tournamentMatches.round,
-        homeTeamId: tournamentMatches.homeTeamId,
-        awayTeamId: tournamentMatches.awayTeamId,
-        homePlaceholder: tournamentMatches.homePlaceholder,
-        awayPlaceholder: tournamentMatches.awayPlaceholder,
-        homeScore: tournamentMatches.homeScore,
-        awayScore: tournamentMatches.awayScore,
-        homeTeamName: homeTeamAlias.name,
-        homeTeamLogo: homeTeamAlias.logo,
-        awayTeamName: awayTeamAlias.name,
-        awayTeamLogo: awayTeamAlias.logo,
-      })
-      .from(tournamentMatches)
-      .leftJoin(tournaments, eq(tournamentMatches.tournamentId, tournaments.id))
-      .leftJoin(
-        homeTeamAlias,
-        eq(tournamentMatches.homeTeamId, homeTeamAlias.id)
-      )
-      .leftJoin(
-        awayTeamAlias,
-        eq(tournamentMatches.awayTeamId, awayTeamAlias.id)
-      )
-      .where(
-        or(
-          eq(tournamentMatches.homeTeamId, teamData.id),
-          eq(tournamentMatches.awayTeamId, teamData.id)
-        )
-      )
-      .orderBy(
-        desc(tournamentMatches.scheduledAt),
-        desc(tournamentMatches.createdAt)
-      );
-
-    const achievements = await db
-      .select({
-        id: tournamentAchievements.id,
-        title: tournamentAchievements.title,
-        description: tournamentAchievements.description,
-        position: tournamentAchievements.position,
-        awardedAt: tournamentAchievements.awardedAt,
-        tournamentId: tournamentAchievements.tournamentId,
-        tournamentName: tournaments.name,
-      })
-      .from(tournamentAchievements)
-      .leftJoin(
-        tournaments,
-        eq(tournamentAchievements.tournamentId, tournaments.id)
-      )
-      .where(eq(tournamentAchievements.organizationId, teamData.id))
-      .orderBy(
-        desc(tournamentAchievements.awardedAt),
-        desc(tournamentAchievements.createdAt)
-      );
-
-    const matches = matchesRaw.map((match) =>
-      mapMatchForTeam(match, teamData.id)
     );
 
     return c.json({
-      id: teamData.id,
-      name: teamData.name,
-      slug: teamData.slug,
-      status: teamData.status,
-      logo: teamData.logo,
-      coverImage: teamData.coverImage,
-      teamNumber: teamData.teamNumber,
-      location: teamData.location,
-      description: teamData.description,
-      createdAt: teamData.createdAt,
-      isMember: !!teamData.memberRole,
-      memberRole: teamData.memberRole,
-      memberJoinedAt: teamData.memberJoinedAt,
-      members,
+      id: team.id,
+      name: team.name,
+      slug: team.slug,
+      status: team.status,
+      logo: team.logo,
+      coverImage: team.coverImage,
+      teamNumber: team.teamNumber,
+      location: team.location,
+      description: team.description,
+      createdAt: team.createdAt,
+      isMember: team.members.length > 0,
+      memberRole: team.members[0]?.role,
+      memberJoinedAt: team.members[0]?.createdAt ?? null,
+      members: members.map((m) => ({
+        id: m.id,
+        userId: m.userId,
+        role: m.role,
+        joinedAt: m.createdAt,
+        name: m.user?.name ?? null,
+        email: m.user?.email ?? null,
+      })),
       tournaments: tournamentHistory.map((entry) => ({
-        id: entry.id,
-        name: entry.name,
-        slug: entry.slug,
-        status: entry.status,
-        location: entry.location,
-        season: entry.season,
-        startDate: entry.startDate?.toISOString() ?? null,
-        endDate: entry.endDate?.toISOString() ?? null,
+        id: entry.tournament.id,
+        name: entry.tournament.name,
+        slug: entry.tournament.slug,
+        status: entry.tournament.status,
+        location: entry.tournament.location,
+        season: entry.tournament.season,
+        startDate: entry.tournament.startDate?.toISOString() ?? null,
+        endDate: entry.tournament.endDate?.toISOString() ?? null,
         placement: entry.placement,
         result: entry.result,
-        registrationId: entry.participationId,
-        registrationStatus: entry.registrationStatus,
+        registrationId: entry.id,
+        registrationStatus: entry.status,
       })),
       matches,
-      achievements: achievements.map((achievement) => ({
-        id: achievement.id,
-        title: achievement.title,
-        description: achievement.description,
-        position: achievement.position,
-        awardedAt: achievement.awardedAt?.toISOString() ?? null,
-        tournamentId: achievement.tournamentId,
-        tournamentName: achievement.tournamentName,
+      achievements: achievements.map((a) => ({
+        id: a.id,
+        title: a.title,
+        description: a.description,
+        position: a.position,
+        awardedAt: a.awardedAt?.toISOString() ?? null,
+        tournamentId: a.tournamentId ?? null,
+        tournamentName: a.tournament?.name ?? null,
       })),
       invitations: [],
     });
@@ -563,42 +531,26 @@ teamsRoute.patch("/:slug", async (c: Context) => {
     const userId = session.user.id;
     const body = await c.req.json();
 
-    // First get the team to check membership
-    const teamResult = await db
-      .select({ id: organizations.id })
-      .from(organizations)
-      .where(eq(organizations.slug, slug))
-      .limit(1);
-
-    if (!teamResult.length) {
+    const team = await prisma.organization.findUnique({
+      where: { slug },
+      select: { id: true },
+    });
+    if (!team) {
       return c.json({ error: "Team not found" }, 404);
     }
 
-    const teamId = teamResult[0]?.id; // Added nullish coalescing
-    if (!teamId) {
-      return c.json({ error: "Team ID not found" }, 404);
-    }
+    const membership = await prisma.organizationMember.findFirst({
+      where: { organizationId: team.id, userId },
+      select: { role: true },
+    });
 
-    // Check if user is a mentor
-    const membership = await db
-      .select({ role: organizationMembers.role })
-      .from(organizationMembers)
-      .where(
-        and(
-          eq(organizationMembers.organizationId, teamId),
-          eq(organizationMembers.userId, userId)
-        )
-      )
-      .limit(1);
-
-    if (!membership.length || membership[0]?.role !== "TEAM_MENTOR") {
+    if (!membership || membership.role !== "TEAM_MENTOR") {
       return c.json({ error: "Only team mentors can edit team settings" }, 403);
     }
 
-    // Update the team
-    await db
-      .update(organizations)
-      .set({
+    await prisma.organization.update({
+      where: { slug },
+      data: {
         name: body.name,
         description: body.description,
         location: body.location,
@@ -607,32 +559,30 @@ teamsRoute.patch("/:slug", async (c: Context) => {
         logo: body.logo,
         coverImage: body.coverImage,
         updatedAt: new Date(),
-      })
-      .where(eq(organizations.slug, slug));
+      },
+    });
 
-    // Fetch updated team
-    const updatedTeam = await db
-      .select({
-        id: organizations.id,
-        name: organizations.name,
-        slug: organizations.slug,
-        status: organizations.status,
-        logo: organizations.logo,
-        coverImage: organizations.coverImage,
-        teamNumber: organizations.teamNumber,
-        location: organizations.location,
-        description: organizations.description,
-        createdAt: organizations.createdAt,
-      })
-      .from(organizations)
-      .where(eq(organizations.slug, slug))
-      .limit(1);
+    const updated = await prisma.organization.findUnique({
+      where: { slug },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        status: true,
+        logo: true,
+        coverImage: true,
+        teamNumber: true,
+        location: true,
+        description: true,
+        createdAt: true,
+      },
+    });
 
-    if (!updatedTeam.length) {
+    if (!updated) {
       return c.json({ error: "Team not found after update" }, 404);
     }
 
-    return c.json(updatedTeam[0]);
+    return c.json(updated);
   } catch (error) {
     console.error("Error updating team:", error);
     return c.json({ error: "Internal server error" }, 500);
@@ -653,132 +603,82 @@ teamsRoute.post("/:slug/invite/bulk", async (c: Context) => {
       return c.json({ error: "Team slug is required" }, 400);
     }
 
-    const body = await c.req.json();
-    const { members } = body;
+    type MemberPayload = { email: string; fullName?: string };
+    const body = (await c.req.json()) as { members: MemberPayload[] };
+    const members: MemberPayload[] = body.members ?? [];
 
-    const teamResult = await db
-      .select({ id: organizations.id, name: organizations.name })
-      .from(organizations)
-      .where(eq(organizations.slug, slug))
-      .limit(1);
+    const team = await prisma.organization.findUnique({
+      where: { slug },
+      select: { id: true, name: true },
+    });
 
-    if (!teamResult.length) {
+    if (!team) {
       return c.json({ error: "Team not found" }, 404);
     }
 
-    const team = teamResult[0];
-    if (!team) {
-      return c.json({ error: "Team data not found" }, 404);
-    }
+    const membership = await prisma.organizationMember.findFirst({
+      where: { organizationId: team.id, userId: session.user.id },
+      select: { role: true },
+    });
 
-    // Check if user is a team mentor or leader
-    const memberships = await db
-      .select({ role: organizationMembers.role })
-      .from(organizationMembers)
-      .where(
-        and(
-          eq(organizationMembers.organizationId, team.id),
-          eq(organizationMembers.userId, session.user.id)
-        )
-      )
-      .limit(1);
-
-    if (!memberships.length) {
+    if (!membership) {
       return c.json({ error: "You are not a member of this team" }, 403);
     }
 
-    const memberRole = memberships[0]?.role;
-    if (memberRole !== "TEAM_MENTOR" && memberRole !== "TEAM_LEADER") {
-      return c.json(
-        { error: "Only team mentors and leaders can invite members" },
-        403
-      );
+    const canInvite =
+      membership.role === "TEAM_MENTOR" || membership.role === "TEAM_LEADER";
+    if (!canInvite) {
+      return c.json({ error: "Only team mentors and leaders can invite members" }, 403);
     }
 
-    type InviteResult = {
-      email: string;
-      success: boolean;
-      message: string;
-    };
-
+    type InviteResult = { email: string; success: boolean; message: string };
     const results: InviteResult[] = [];
 
-    // Process each member
     for (const member of members) {
-      const { email } = member;
-      let { fullName } = member;
+      const emailInput = member.email ?? "";
+      const normalizedEmail: string = (emailInput ?? "").trim();
+      let fullName = member.fullName?.trim();
 
-      if (!email?.trim()) {
-        results.push({
-          email: email || "unknown",
-          success: false,
-          message: "Email is required",
-        });
+      if (!normalizedEmail) {
+        results.push({ email: emailInput || "unknown", success: false, message: "Email is required" });
         continue;
       }
 
-      if (!fullName?.trim()) {
-        fullName = email
-          .split("@")[0]
+      if (!fullName) {
+        const localPart = normalizedEmail.split("@")[0] ?? normalizedEmail;
+        fullName = localPart
           .replace(/[._-]/g, " ")
           .replace(/\b\w/g, (l: string) => l.toUpperCase());
       }
 
       try {
-        // Check if user exists
-        const existingUsers = await db
-          .select({
-            id: user.id,
-            name: user.name,
-            email: user.email,
-          })
-          .from(user)
-          .where(eq(user.email, email.toLowerCase()))
-          .limit(1);
+        const emailLower = normalizedEmail.toLowerCase();
 
-        if (existingUsers.length > 0) {
-          // User exists - add to team
-          const existingUser = existingUsers[0];
-          if (!existingUser) {
-            // Explicit check for existingUser
-            results.push({
-              email: email.toLowerCase(),
-              success: false,
-              message: "Failed to retrieve existing user",
-            });
-            continue;
-          }
+        const existingUser = await prisma.user.findUnique({
+          where: { email: emailLower },
+          select: { id: true, name: true, email: true },
+        });
 
-          // Check if already a member
-          const existingMemberships = await db
-            .select()
-            .from(organizationMembers)
-            .where(
-              and(
-                eq(organizationMembers.organizationId, team.id),
-                eq(organizationMembers.userId, existingUser.id)
-              )
-            )
-            .limit(1);
-
-          if (existingMemberships.length > 0) {
-            results.push({
-              email: email.toLowerCase(),
-              success: false,
-              message: "Already a member",
-            });
-            continue;
-          }
-
-          // Add user to team
-          await db.insert(organizationMembers).values({
-            id: crypto.randomUUID(),
-            organizationId: team.id,
-            userId: existingUser.id,
-            role: "TEAM_MEMBER",
+        if (existingUser) {
+          const alreadyMember = await prisma.organizationMember.findFirst({
+            where: { organizationId: team.id, userId: existingUser.id },
+            select: { id: true },
           });
 
-          // Send notification email (don't await to speed up)
+          if (alreadyMember) {
+            results.push({ email: emailLower, success: false, message: "Already a member" });
+            continue;
+          }
+
+          await prisma.organizationMember.create({
+            data: {
+              id: crypto.randomUUID(),
+              organizationId: team.id,
+              userId: existingUser.id,
+              role: "TEAM_MEMBER",
+            },
+          });
+
           sendTeamMemberAddedEmail({
             email: existingUser.email,
             userName: existingUser.name,
@@ -786,89 +686,51 @@ teamsRoute.post("/:slug/invite/bulk", async (c: Context) => {
             inviterName: session.user.name,
           }).catch(console.error);
 
-          results.push({
-            email: email.toLowerCase(),
-            success: true,
-            message: "Added to team",
-          });
+          results.push({ email: emailLower, success: true, message: "Added to team" });
         } else {
-          // User doesn't exist - create account
           const temporaryPassword = crypto.randomBytes(8).toString("hex");
 
-          // Create user account
           const signUpResult = await auth.api.signUpEmail({
-            body: {
-              name: fullName.trim(),
-              email: email.toLowerCase().trim(),
-              password: temporaryPassword,
-            },
+            body: { name: fullName.trim(), email: emailLower, password: temporaryPassword },
           });
 
           if (!signUpResult) {
-            results.push({
-              email: email.toLowerCase(),
-              success: false,
-              message: "Failed to create account",
-            });
+            results.push({ email: emailLower, success: false, message: "Failed to create account" });
             continue;
           }
 
-          // Get newly created user
-          const newUsers = await db
-            .select({ id: user.id })
-            .from(user)
-            .where(eq(user.email, email.toLowerCase()))
-            .limit(1);
-
-          if (!newUsers.length) {
-            results.push({
-              email: email.toLowerCase(),
-              success: false,
-              message: "Failed to retrieve user",
-            });
-            continue;
-          }
-
-          const newUser = newUsers[0];
-          if (!newUser) {
-            results.push({
-              email: email.toLowerCase(),
-              success: false,
-              message: "Failed to retrieve user",
-            });
-            continue;
-          }
-
-          // Add to team
-          await db.insert(organizationMembers).values({
-            id: crypto.randomUUID(),
-            organizationId: team.id,
-            userId: newUser.id,
-            role: "TEAM_MEMBER",
+          const newUser = await prisma.user.findUnique({
+            where: { email: emailLower },
+            select: { id: true },
           });
 
-          // Send welcome email (don't await to speed up)
+          if (!newUser) {
+            results.push({ email: emailLower, success: false, message: "Failed to retrieve user" });
+            continue;
+          }
+
+          await prisma.organizationMember.create({
+            data: {
+              id: crypto.randomUUID(),
+              organizationId: team.id,
+              userId: newUser.id,
+              role: "TEAM_MEMBER",
+            },
+          });
+
           sendTeamMemberWelcomeEmail({
-            email: email.toLowerCase(),
+            email: emailLower,
             userName: fullName.trim(),
             teamName: team.name,
             inviterName: session.user.name,
             temporaryPassword,
           }).catch(console.error);
 
-          results.push({
-            email: email.toLowerCase(),
-            success: true,
-            message: "Account created and added to team",
-          });
+          results.push({ email: emailLower, success: true, message: "Account created and added to team" });
         }
       } catch (error) {
-        console.error(`Error processing member ${email}:`, error);
-        results.push({
-          email: email.toLowerCase(),
-          success: false,
-          message: "Internal error",
-        });
+        console.error(`Error processing member ${normalizedEmail}:`, error);
+        results.push({ email: normalizedEmail.toLowerCase(), success: false, message: "Internal error" });
       }
     }
 
@@ -893,108 +755,70 @@ teamsRoute.post("/:slug/invite", async (c: Context) => {
       return c.json({ error: "Team slug is required" }, 400);
     }
 
-    const body = await c.req.json();
-    const { email } = body;
-    let { fullName } = body;
+    const body = (await c.req.json()) as { email: string; fullName?: string };
+    const emailInput = body.email ?? "";
+    const normalizedEmail: string = (emailInput ?? "").trim();
+    let fullName = body.fullName?.trim();
 
-    // Validate required fields
-    if (!email?.trim()) {
+    if (!normalizedEmail) {
       return c.json({ error: "Email is required" }, 400);
     }
 
-    if (!fullName?.trim()) {
-      fullName = email
-        .split("@")[0]
+    if (!fullName) {
+      const localPart = normalizedEmail.split("@")[0] ?? normalizedEmail;
+      fullName = localPart
         .replace(/[._-]/g, " ")
         .replace(/\b\w/g, (l: string) => l.toUpperCase());
     }
 
-    // Get team
-    const teamResult = await db
-      .select({ id: organizations.id, name: organizations.name })
-      .from(organizations)
-      .where(eq(organizations.slug, slug))
-      .limit(1);
+    const team = await prisma.organization.findUnique({
+      where: { slug },
+      select: { id: true, name: true },
+    });
 
-    if (!teamResult.length) {
+    if (!team) {
       return c.json({ error: "Team not found" }, 404);
     }
 
-    const team = teamResult[0];
-    if (!team) {
-      return c.json({ error: "Team data not found" }, 404);
-    }
+    const membership = await prisma.organizationMember.findFirst({
+      where: { organizationId: team.id, userId: session.user.id },
+      select: { role: true },
+    });
 
-    // Check if user is a team mentor or leader
-    const memberships = await db
-      .select({ role: organizationMembers.role })
-      .from(organizationMembers)
-      .where(
-        and(
-          eq(organizationMembers.organizationId, team.id),
-          eq(organizationMembers.userId, session.user.id)
-        )
-      )
-      .limit(1);
-
-    if (!memberships.length) {
+    if (!membership) {
       return c.json({ error: "You are not a member of this team" }, 403);
     }
 
-    const memberRole = memberships[0]?.role;
-    if (memberRole !== "TEAM_MENTOR" && memberRole !== "TEAM_LEADER") {
-      return c.json(
-        { error: "Only team mentors and leaders can invite members" },
-        403
-      );
+    const canInvite =
+      membership.role === "TEAM_MENTOR" || membership.role === "TEAM_LEADER";
+    if (!canInvite) {
+      return c.json({ error: "Only team mentors and leaders can invite members" }, 403);
     }
 
-    // Check if user already exists
-    const existingUsers = await db
-      .select({
-        id: user.id,
-        name: user.name,
-        email: user.email,
-      })
-      .from(user)
-      .where(eq(user.email, email.toLowerCase()))
-      .limit(1);
+    const existingUser = await prisma.user.findUnique({
+      where: { email: normalizedEmail.toLowerCase() },
+      select: { id: true, name: true, email: true },
+    });
 
-    if (existingUsers.length > 0) {
-      // Scenario A: User exists
-      const existingUser = existingUsers[0];
-      if (!existingUser) {
-        return c.json({ error: "Failed to retrieve existing user" }, 500);
-      }
-
-      // Check if user is already a member
-      const existingMemberships = await db
-        .select()
-        .from(organizationMembers)
-        .where(
-          and(
-            eq(organizationMembers.organizationId, team.id),
-            eq(organizationMembers.userId, existingUser.id)
-          )
-        )
-        .limit(1);
-
-      if (existingMemberships.length > 0) {
-        return c.json(
-          { error: "This user is already a member of the team" },
-          409
-        );
-      }
-
-      // Add user to team
-      await db.insert(organizationMembers).values({
-        id: crypto.randomUUID(),
-        organizationId: team.id,
-        userId: existingUser.id,
-        role: "TEAM_MEMBER",
+    if (existingUser) {
+      const alreadyMember = await prisma.organizationMember.findFirst({
+        where: { organizationId: team.id, userId: existingUser.id },
+        select: { id: true },
       });
 
-      // Send notification email
+      if (alreadyMember) {
+        return c.json({ error: "This user is already a member of the team" }, 409);
+      }
+
+      await prisma.organizationMember.create({
+        data: {
+          id: crypto.randomUUID(),
+          organizationId: team.id,
+          userId: existingUser.id,
+          role: "TEAM_MEMBER",
+        },
+      });
+
       await sendTeamMemberAddedEmail({
         email: existingUser.email,
         userName: existingUser.name,
@@ -1002,67 +826,46 @@ teamsRoute.post("/:slug/invite", async (c: Context) => {
         inviterName: session.user.name,
       });
 
-      return c.json({
-        message: `${existingUser.name} has been added to the team`,
-        userExists: true,
-      });
+      return c.json({ message: `${existingUser.name} has been added to the team`, userExists: true });
     }
 
-    // Scenario B: User doesn't exist - auto-provision
     const temporaryPassword = crypto.randomBytes(8).toString("hex");
 
-    // Create user account using better-auth
-    const signUpResult = await auth.api.signUpEmail({
-      body: {
-        name: fullName.trim(),
-        email: email.toLowerCase().trim(),
-        password: temporaryPassword,
-      },
+      const signUpResult = await auth.api.signUpEmail({
+        body: { name: fullName.trim(), email: normalizedEmail.toLowerCase(), password: temporaryPassword },
     });
 
     if (!signUpResult) {
       return c.json({ error: "Failed to create user account" }, 500);
     }
 
-    // Get the newly created user
-    const newUsers = await db
-      .select({ id: user.id })
-      .from(user)
-      .where(eq(user.email, email.toLowerCase()))
-      .limit(1);
+      const newUser = await prisma.user.findUnique({
+        where: { email: normalizedEmail.toLowerCase() },
+      select: { id: true },
+    });
 
-    if (!newUsers.length) {
-      return c.json({ error: "Failed to retrieve new user" }, 500);
-    }
-
-    const newUser = newUsers[0];
     if (!newUser) {
       return c.json({ error: "Failed to retrieve new user" }, 500);
     }
 
-    // Add user to team
-    await db.insert(organizationMembers).values({
-      id: crypto.randomUUID(),
-      organizationId: team.id,
-      userId: newUser.id,
-      role: "TEAM_MEMBER",
+      await prisma.organizationMember.create({
+      data: {
+        id: crypto.randomUUID(),
+        organizationId: team.id,
+        userId: newUser.id,
+        role: "TEAM_MEMBER",
+      },
     });
-    // Send welcome email with credentials
-    await sendTeamMemberWelcomeEmail({
-      email: email.toLowerCase(),
+
+      await sendTeamMemberWelcomeEmail({
+        email: normalizedEmail.toLowerCase(),
       userName: fullName.trim(),
       teamName: team.name,
       inviterName: session.user.name,
       temporaryPassword,
     });
 
-    return c.json(
-      {
-        message: `Account created for ${fullName} and added to team`,
-        userExists: false,
-      },
-      201
-    );
+    return c.json({ message: `Account created for ${fullName} and added to team`, userExists: false }, 201);
   } catch (error) {
     console.error("Invite error:", error);
     return c.json({ error: "Internal server error" }, 500);
@@ -1080,95 +883,45 @@ teamsRoute.post("/:slug/avatar", async (c: Context) => {
     const userId = session.user.id;
     const slug = c.req.param("slug");
 
-    // Get team and check membership
-    const teamResult = await db
-      .select()
-      .from(organizations)
-      .where(eq(organizations.slug, slug))
-      .limit(1);
-
-    if (teamResult.length === 0) {
+    const team = await prisma.organization.findUnique({ where: { slug }, select: { id: true } });
+    if (!team) {
       return c.json({ error: "Team not found" }, 404);
     }
 
-    const team = teamResult[0];
-    if (!team) {
-      return c.json({ error: "Team data not found" }, 404);
-    }
+    const member = await prisma.organizationMember.findFirst({
+      where: { organizationId: team.id, userId, role: "TEAM_MENTOR" },
+      select: { id: true },
+    });
 
-    // Check if user is a mentor of this team
-    const memberResult = await db
-      .select()
-      .from(organizationMembers)
-      .where(
-        and(
-          eq(organizationMembers.organizationId, team.id),
-          eq(organizationMembers.userId, userId),
-          eq(organizationMembers.role, "TEAM_MENTOR")
-        )
-      )
-      .limit(1);
-
-    if (memberResult.length === 0) {
+    if (!member) {
       return c.json({ error: "Only team mentors can upload avatars" }, 403);
     }
 
-    // Parse the uploaded file
     const body = await c.req.parseBody();
-    const file = body.file;
+    const file = (body as any).file as File | undefined;
 
     if (!(file instanceof File)) {
       return c.json({ error: "A file must be provided" }, 400);
     }
 
-    // Validate file size
     if (file.size > MAX_AVATAR_SIZE) {
-      return c.json(
-        {
-          error: `File size exceeds maximum allowed size of ${MAX_AVATAR_SIZE / 1024 / 1024}MB`,
-        },
-        400
-      );
+      return c.json({ error: `File size exceeds maximum allowed size of ${MAX_AVATAR_SIZE / 1024 / 1024}MB` }, 400);
     }
 
-    // Validate file type
     if (!ALLOWED_IMAGE_MIME_TYPES.includes(file.type)) {
-      return c.json(
-        {
-          error:
-            "File type not supported. Please upload an image (JPEG, PNG, GIF, or WebP)",
-        },
-        400
-      );
+      return c.json({ error: "File type not supported. Please upload an image (JPEG, PNG, GIF, or WebP)" }, 400);
     }
 
-    // Generate unique file ID & key
     const fileId = crypto.randomUUID();
     const safeOriginalName = sanitizeFileName(file.name);
-    const storageData = await uploadTeamImage({
-      file,
-      fileId,
-      storageFolder: "avatars",
-      safeOriginalName,
+    const storageData = await uploadTeamImage({ file, fileId, storageFolder: "avatars", safeOriginalName });
+
+    await prisma.organization.update({
+      where: { id: team.id },
+      data: { logo: storageData.url, updatedAt: new Date(), updatedBy: userId },
     });
 
-    // Update team logo in database
-    await db
-      .update(organizations)
-      .set({
-        logo: storageData.url,
-        updatedAt: sql`(unixepoch('now'))`,
-        updatedBy: userId,
-      })
-      .where(eq(organizations.id, team.id));
-
-    return c.json({
-      id: fileId,
-      url: storageData.url,
-      fileName: file.name,
-      size: file.size,
-      mimeType: file.type,
-    });
+    return c.json({ id: fileId, url: storageData.url, fileName: file.name, size: file.size, mimeType: file.type });
   } catch (error) {
     console.error("Avatar upload error:", error);
     return c.json({ error: "Internal server error" }, 500);
@@ -1186,89 +939,46 @@ teamsRoute.post("/:slug/cover", async (c: Context) => {
     const userId = session.user.id;
     const slug = c.req.param("slug");
 
-    const teamResult = await db
-      .select()
-      .from(organizations)
-      .where(eq(organizations.slug, slug))
-      .limit(1);
-
-    if (!teamResult.length) {
+    const team = await prisma.organization.findUnique({ where: { slug }, select: { id: true } });
+    if (!team) {
       return c.json({ error: "Team not found" }, 404);
     }
 
-    const teamData = teamResult[0];
-    if (!teamData) {
-      return c.json({ error: "Team data not found" }, 404);
-    }
+    const member = await prisma.organizationMember.findFirst({
+      where: { organizationId: team.id, userId, role: "TEAM_MENTOR" },
+      select: { id: true },
+    });
 
-    const memberResult = await db
-      .select()
-      .from(organizationMembers)
-      .where(
-        and(
-          eq(organizationMembers.organizationId, teamData.id),
-          eq(organizationMembers.userId, userId),
-          eq(organizationMembers.role, "TEAM_MENTOR")
-        )
-      )
-      .limit(1);
-
-    if (!memberResult.length) {
-      return c.json(
-        { error: "Only team mentors can upload cover images" },
-        403
-      );
+    if (!member) {
+      return c.json({ error: "Only team mentors can upload cover images" }, 403);
     }
 
     const body = await c.req.parseBody();
-    const file = body.file;
+    const file = (body as any).file as File | undefined;
 
     if (!(file instanceof File)) {
       return c.json({ error: "A file must be provided" }, 400);
     }
 
     if (file.size > MAX_COVER_SIZE) {
-      return c.json(
-        {
-          error: `File size exceeds maximum allowed size of ${MAX_COVER_SIZE / 1024 / 1024}MB`,
-        },
-        400
-      );
+      return c.json({ error: `File size exceeds maximum allowed size of ${MAX_COVER_SIZE / 1024 / 1024}MB` }, 400);
     }
 
     if (!ALLOWED_IMAGE_MIME_TYPES.includes(file.type)) {
-      return c.json(
-        { error: "Invalid image type. Use JPEG, PNG, GIF, or WebP files." },
-        400
-      );
+      return c.json({ error: "Invalid image type. Use JPEG, PNG, GIF, or WebP files." }, 400);
     }
 
     const fileId = crypto.randomUUID();
     const safeOriginalName = sanitizeFileName(file.name);
 
-    const storageData = await uploadTeamImage({
-      file,
-      fileId,
-      storageFolder: "covers",
-      safeOriginalName,
+    const storageData = await uploadTeamImage({ file, fileId, storageFolder: "covers", safeOriginalName });
+
+    await prisma.organization.update({
+      where: { id: team.id },
+      data: { coverImage: storageData.url, updatedAt: new Date(), updatedBy: userId },
     });
 
-    await db
-      .update(organizations)
-      .set({
-        coverImage: storageData.url,
-        updatedAt: sql`(unixepoch('now'))`,
-        updatedBy: userId,
-      })
-      .where(eq(organizations.id, teamData.id));
-
-    return c.json({
-      id: fileId,
-      url: storageData.url,
-      fileName: file.name,
-      size: file.size,
-      mimeType: file.type,
-    });
+    return c.json({ id: fileId, url: storageData.url, fileName: file.name, size: file.size, mimeType: file.type });
   } catch (error) {
     console.error("Cover upload error:", error);
     return c.json({ error: "Internal server error" }, 500);
@@ -1287,95 +997,52 @@ teamsRoute.patch("/:slug/members/:memberId/role", async (c: Context) => {
     const { slug, memberId } = c.req.param();
     const { role: newRole } = await c.req.json();
 
-    // Validate role
-    const validRoles = ["TEAM_MEMBER", "TEAM_LEADER", "TEAM_MENTOR"];
+    const validRoles = ["TEAM_MEMBER", "TEAM_LEADER", "TEAM_MENTOR"] as const;
     if (!validRoles.includes(newRole)) {
       return c.json({ error: "Invalid role" }, 400);
     }
 
-    // Get team
-    const team = await db
-      .select()
-      .from(organizations)
-      .where(eq(organizations.slug, slug as string))
-      .limit(1);
-
-    if (!team.length) {
+    const team = await prisma.organization.findUnique({ where: { slug }, select: { id: true } });
+    if (!team) {
       return c.json({ error: "Team not found" }, 404);
     }
 
-    const teamId = team[0]?.id; // Added nullish coalescing
-    if (!teamId) {
-      return c.json({ error: "Team ID not found" }, 404);
-    }
+    const currentMembership = await prisma.organizationMember.findFirst({
+      where: { organizationId: team.id, userId },
+      select: { role: true },
+    });
 
-    // Check if current user is a member of the team
-    const currentUserMembership = await db
-      .select({ role: organizationMembers.role })
-      .from(organizationMembers)
-      .where(
-        and(
-          eq(organizationMembers.organizationId, teamId),
-          eq(organizationMembers.userId, userId)
-        )
-      )
-      .limit(1);
-
-    if (!currentUserMembership.length) {
+    if (!currentMembership) {
       return c.json({ error: "You are not a member of this team" }, 403);
     }
 
-    const currentUserRole = currentUserMembership[0]?.role; // Added nullish coalescing
-    if (!currentUserRole) {
-      return c.json({ error: "User role not found" }, 403);
-    }
+    const currentUserRole = currentMembership.role;
 
-    // Check permissions
-    if (
-      currentUserRole !== "TEAM_MENTOR" &&
-      currentUserRole !== "TEAM_LEADER"
-    ) {
+    if (currentUserRole !== "TEAM_MENTOR" && currentUserRole !== "TEAM_LEADER") {
       return c.json({ error: "Insufficient permissions" }, 403);
     }
 
-    // Leaders can only demote to member
     if (currentUserRole === "TEAM_LEADER" && newRole !== "TEAM_MEMBER") {
       return c.json({ error: "Leaders can only change roles to Member" }, 403);
     }
 
-    // Cannot change your own role
     if (memberId === userId) {
       return c.json({ error: "Cannot change your own role" }, 403);
     }
 
-    // Check if target member exists in the team
-    const targetMembership = await db
-      .select()
-      .from(organizationMembers)
-      .where(
-        and(
-          eq(organizationMembers.organizationId, teamId),
-          eq(organizationMembers.userId, memberId as string)
-        )
-      )
-      .limit(1);
+    const targetMembership = await prisma.organizationMember.findFirst({
+      where: { organizationId: team.id, userId: memberId as string },
+      select: { id: true },
+    });
 
-    if (!targetMembership.length) {
+    if (!targetMembership) {
       return c.json({ error: "Member not found in this team" }, 404);
     }
 
-    // Update member role
-    await db
-      .update(organizationMembers)
-      .set({
-        role: newRole,
-      })
-      .where(
-        and(
-          eq(organizationMembers.organizationId, teamId),
-          eq(organizationMembers.userId, memberId as string)
-        )
-      );
+    await prisma.organizationMember.update({
+      where: { id: targetMembership.id },
+      data: { role: newRole },
+    });
 
     return c.json({ success: true });
   } catch (error) {
@@ -1395,82 +1062,42 @@ teamsRoute.delete("/:slug/members/:memberId", async (c: Context) => {
     const userId = session.user.id;
     const { slug, memberId } = c.req.param();
 
-    // Cannot remove yourself
     if (memberId === userId) {
       return c.json({ error: "Cannot remove yourself from the team" }, 403);
     }
 
-    // Get team
-    const team = await db
-      .select()
-      .from(organizations)
-      .where(eq(organizations.slug, slug as string))
-      .limit(1);
-
-    if (!team.length) {
+    const team = await prisma.organization.findUnique({ where: { slug }, select: { id: true } });
+    if (!team) {
       return c.json({ error: "Team not found" }, 404);
     }
 
-    const teamId = team[0]?.id; // Added nullish coalescing
-    if (!teamId) {
-      return c.json({ error: "Team ID not found" }, 404);
-    }
+    const currentMembership = await prisma.organizationMember.findFirst({
+      where: { organizationId: team.id, userId },
+      select: { role: true },
+    });
 
-    const currentUserMembership = await db
-      .select({ role: organizationMembers.role })
-      .from(organizationMembers)
-      .where(
-        and(
-          eq(organizationMembers.organizationId, teamId),
-          eq(organizationMembers.userId, userId)
-        )
-      )
-      .limit(1);
-
-    if (!currentUserMembership.length) {
+    if (!currentMembership) {
       return c.json({ error: "You are not a member of this team" }, 403);
     }
 
-    const currentUserRole = currentUserMembership[0]?.role; // Added nullish coalescing
-    if (!currentUserRole) {
-      return c.json({ error: "User role not found" }, 403);
-    }
-
-    // Only mentors can remove members
-    if (currentUserRole !== "TEAM_MENTOR") {
+    if (currentMembership.role !== "TEAM_MENTOR") {
       return c.json({ error: "Only mentors can remove team members" }, 403);
     }
 
-    // Cannot remove yourself
     if (memberId === userId) {
       return c.json({ error: "Cannot remove yourself from the team" }, 403);
     }
 
-    // Check if target member exists in the team
-    const targetMembership = await db
-      .select()
-      .from(organizationMembers)
-      .where(
-        and(
-          eq(organizationMembers.organizationId, teamId),
-          eq(organizationMembers.userId, memberId as string)
-        )
-      )
-      .limit(1);
+    const targetMembership = await prisma.organizationMember.findFirst({
+      where: { organizationId: team.id, userId: memberId as string },
+      select: { id: true },
+    });
 
-    if (!targetMembership.length) {
+    if (!targetMembership) {
       return c.json({ error: "Member not found in this team" }, 404);
     }
 
-    // Remove member from team
-    await db
-      .delete(organizationMembers)
-      .where(
-        and(
-          eq(organizationMembers.organizationId, teamId),
-          eq(organizationMembers.userId, memberId as string)
-        )
-      );
+    await prisma.organizationMember.delete({ where: { id: targetMembership.id } });
 
     return c.json({ success: true });
   } catch (error) {
@@ -1480,3 +1107,4 @@ teamsRoute.delete("/:slug/members/:memberId", async (c: Context) => {
 });
 
 export default teamsRoute;
+

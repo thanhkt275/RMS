@@ -4,6 +4,8 @@
   "type": "module",
   "scripts": {
     "build": "tsdown",
+    "build:dev": "bun run typecheck && bun run build",
+    "typecheck": "tsc -b",
     "check-types": "tsc -b",
     "compile": "bun build --compile --minify --sourcemap --bytecode ./src/index.ts --outfile server",
     "dev": "bun run --hot src/index.ts",
@@ -16,12 +18,11 @@
     "better-auth": "catalog:",
     "dotenv": "catalog:",
     "zod": "catalog:",
-    "@libsql/linux-x64-musl": "0.4.7",
-    "drizzle-orm": "^0.44.7",
     "@rms-modern/auth": "workspace:*",
-    "@rms-modern/db": "workspace:*"
+    "@rms-modern/prisma": "workspace:*"
   },
   "devDependencies": {
+    "@prisma/client": "^7.0.0",
     "@types/bun": "^1.2.6",
     "tsdown": "catalog:",
     "typescript": "catalog:",

@@ -1,4 +1,25 @@
 services:
+  # PostgreSQL database
+  db:
+    container_name: rms-postgres
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-rms}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rms}
+      POSTGRES_DB: ${POSTGRES_DB:-rms}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rms} -d ${POSTGRES_DB:-rms}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+    restart: unless-stopped
+
   # Hono backend server
   server:
     container_name: rms-server
@@ -19,9 +40,10 @@ services:
     environment:
       NODE_ENV: ${SERVER_NODE_ENV:-production}
       PORT: 3000
-    volumes:
-      # Persist SQLite database
-      - server-data:/app/apps/server/data
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-rms}:${POSTGRES_PASSWORD:-rms}@db:5432/${POSTGRES_DB:-rms}?schema=public}
+    depends_on:
+      db:
+        condition: service_healthy
     networks:
       - app-network
     restart: unless-stopped
@@ -87,5 +109,5 @@ networks:
     driver: bridge
 
 volumes:
-  server-data:
+  postgres-data:
     driver: local
