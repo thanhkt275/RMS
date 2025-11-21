@@ -1,0 +1,93 @@
+# Keep Cursor focused on source code. This file complements .gitignore.
+# You can remove items if you want Cursor to index them.
+
+############################
+# VCS / Meta
+############################
+.git/
+.gitignore
+.github/
+.gitlab/
+
+############################
+# Package managers / caches
+############################
+**/node_modules/**
+**/.pnp/**
+**/.yarn/**
+**/.npm/**
+**/.pnpm-store/**
+**/.cache/**
+**/.turbo/**
+**/.vite/**
+**/.parcel-cache/**
+**/*.tsbuildinfo
+
+# Lockfiles (uncomment to include)
+bun.lockb
+pnpm-lock.yaml
+package-lock.json
+
+############################
+# Build outputs
+############################
+**/dist/**
+**/build/**
+**/.next/**
+**/.nuxt/**
+**/.output/**
+**/out/**
+**/storybook-static/**
+
+############################
+# Test artifacts / coverage
+############################
+**/coverage/**
+**/playwright-report/**
+**/test-results/**
+**/cypress/videos/**
+**/cypress/screenshots/**
+
+############################
+# Logs / temp / OS files
+############################
+**/*.log
+**/*.tmp
+**/.DS_Store
+**/Thumbs.db
+
+############################
+# Environment & secrets
+############################
+**/.env*
+
+############################
+# Binary & heavy assets (keep code search fast)
+############################
+**/*.{png,jpg,jpeg,webp,gif,svg,ico,bmp,tiff}
+**/*.{mp4,mov,webm,avi}
+**/*.{mp3,wav,ogg,flac}
+**/*.{ttf,otf,woff,woff2}
+**/*.{pdf,zip,tar,tar.gz,7z}
+
+############################
+# Databases & local dev files
+############################
+**/*.{sqlite,db,db-shm,db-wal}
+
+############################
+# Monorepo specifics
+############################
+apps/**/public/**
+apps/**/.vite/**
+apps/**/coverage/**
+packages/**/dist/**
+packages/**/build/**
+
+############################
+# IDE / editor junk
+############################
+**/.idea/**
+**/.vscode/**
+**/.history/**
+

@@ -7,6 +7,7 @@ import Loader from "./loader";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
+import DatePicker from "./ui/date-picker";
 
 const signUpSchema = z
   .object({
@@ -61,7 +62,6 @@ export default function SignUpForm() {
           password: value.password,
           name: value.name,
           username: value.username,
-          // @ts-expect-error additional fields
           dateOfBirth: value.dateOfBirth,
           phone: value.phone,
         },
@@ -186,13 +186,12 @@ export default function SignUpForm() {
             {(field) => (
               <div className="space-y-2">
                 <Label htmlFor={field.name}>Date of birth</Label>
-                <Input
-                  id={field.name}
-                  max={new Date().toISOString().split("T")[0]}
-                  onBlur={field.handleBlur}
-                  onChange={(event) => field.handleChange(event.target.value)}
-                  type="date"
+                <DatePicker
                   value={field.state.value}
+                  onChange={(next) => field.handleChange(next)}
+                  max={new Date()}
+                  format="MM/dd/yyyy"
+                  className="w-full"
                 />
                 {field.state.meta.errors.map((error) => (
                   <p className="text-red-500" key={error?.message}>
