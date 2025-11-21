@@ -28,9 +28,14 @@ export default function UserMenu() {
 
   if (!session || anonymous) {
     return (
-      <Button asChild variant="outline">
-        <Link to="/login">Sign In</Link>
-      </Button>
+      <div className="flex items-center gap-2">
+        <Button asChild variant="outline">
+          <Link to="/login">Sign In</Link>
+        </Button>
+        <Button asChild>
+          <Link to="/sign-up">Sign Up</Link>
+        </Button>
+      </div>
     );
   }
 
