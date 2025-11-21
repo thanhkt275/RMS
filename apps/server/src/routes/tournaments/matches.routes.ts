@@ -19,6 +19,7 @@ import {
   storeMatchRobotStatus,
   updateMatchStatusBasedOnRobotCheck,
 } from "../../services/match-queuer";
+import { calculateScoreForMatch } from "../../services/score-profile-validator";
 import {
   type MatchUpdateInput,
   matchGenerationSchema,
@@ -61,9 +62,37 @@ function generateMatchesByFormat(
   throw new Error("Unsupported match format");
 }
 
-function buildMatchUpdateData(
-  body: MatchUpdateInput
-): Partial<typeof tournamentMatches.$inferInsert> {
+async function processScoreInput(
+  scoreInput: MatchUpdateInput["homeScoreInput"],
+  stageId: string,
+  team: "home" | "away"
+): Promise<{
+  score: number;
+  breakdown: unknown;
+  opponentAdjustment: number;
+} | null> {
+  if (!scoreInput) {
+    return null;
+  }
+
+  const result = await calculateScoreForMatch(stageId, scoreInput);
+  if (!result.success) {
+    throw new Error(
+      `${team === "home" ? "Home" : "Away"} score calculation failed: ${result.error}${result.errors ? `\n${result.errors.join("\n")}` : ""}`
+    );
+  }
+
+  return {
+    score: result.score,
+    breakdown: result.breakdown,
+    opponentAdjustment: result.opponentScoreAdjustment,
+  };
+}
+
+async function buildMatchUpdateData(
+  body: MatchUpdateInput,
+  stageId: string
+): Promise<Partial<typeof tournamentMatches.$inferInsert>> {
   const updateData: Partial<typeof tournamentMatches.$inferInsert> = {
     updatedAt: new Date(),
   };
@@ -74,12 +103,63 @@ function buildMatchUpdateData(
   if (body.scheduledAt) {
     updateData.scheduledAt = new Date(body.scheduledAt);
   }
-  if (body.homeScore !== undefined) {
-    updateData.homeScore = body.homeScore;
+
+  // Handle home score
+  const homeScoreResult = await processScoreInput(
+    body.homeScoreInput,
+    stageId,
+    "home"
+  );
+  let homeScore: number | null | undefined;
+  let awayPenaltyAdjustment = 0;
+
+  if (homeScoreResult) {
+    homeScore = homeScoreResult.score;
+    updateData.homeScore = homeScore;
+    updateData.homeScoreBreakdown = JSON.stringify(homeScoreResult.breakdown);
+    // Home's opponent penalties affect away team
+    awayPenaltyAdjustment = homeScoreResult.opponentAdjustment;
+  } else if (body.homeScore !== undefined) {
+    homeScore = body.homeScore;
+    updateData.homeScore = homeScore;
   }
-  if (body.awayScore !== undefined) {
-    updateData.awayScore = body.awayScore;
+
+  // Handle away score
+  const awayScoreResult = await processScoreInput(
+    body.awayScoreInput,
+    stageId,
+    "away"
+  );
+  let awayScore: number | null | undefined;
+  let homePenaltyAdjustment = 0;
+
+  if (awayScoreResult) {
+    awayScore = awayScoreResult.score;
+    updateData.awayScore = awayScore;
+    updateData.awayScoreBreakdown = JSON.stringify(awayScoreResult.breakdown);
+    // Away's opponent penalties affect home team
+    homePenaltyAdjustment = awayScoreResult.opponentAdjustment;
+  } else if (body.awayScore !== undefined) {
+    awayScore = body.awayScore;
+    updateData.awayScore = awayScore;
   }
+
+  // Apply opponent penalty adjustments
+  if (
+    homePenaltyAdjustment !== 0 &&
+    homeScore !== undefined &&
+    homeScore !== null
+  ) {
+    updateData.homeScore = Math.max(0, homeScore + homePenaltyAdjustment);
+  }
+  if (
+    awayPenaltyAdjustment !== 0 &&
+    awayScore !== undefined &&
+    awayScore !== null
+  ) {
+    updateData.awayScore = Math.max(0, awayScore + awayPenaltyAdjustment);
+  }
+
   if (body.homeTeamId !== undefined) {
     updateData.homeTeamId = body.homeTeamId;
   }
@@ -423,15 +503,38 @@ matchesRoute.patch(
       }
 
       const match = existingMatches[0] as (typeof existingMatches)[0];
-      const updateData = buildMatchUpdateData(body);
+
+      let updateData: Partial<typeof tournamentMatches.$inferInsert>;
+      try {
+        updateData = await buildMatchUpdateData(body, stageId);
+      } catch (error) {
+        return c.json(
+          {
+            error:
+              error instanceof Error
+                ? error.message
+                : "Score calculation failed",
+          },
+          400
+        );
+      }
 
       // If status is COMPLETED, ensure scores are present
       if (body.status === "COMPLETED") {
+        const finalHomeScore =
+          updateData.homeScore !== undefined
+            ? updateData.homeScore
+            : match.homeScore;
+        const finalAwayScore =
+          updateData.awayScore !== undefined
+            ? updateData.awayScore
+            : match.awayScore;
+
         const errors = ensureScoresForCompletion(
-          body.homeScore,
-          body.awayScore,
-          body.homeTeamId,
-          body.awayTeamId
+          finalHomeScore,
+          finalAwayScore,
+          body.homeTeamId !== undefined ? body.homeTeamId : match.homeTeamId,
+          body.awayTeamId !== undefined ? body.awayTeamId : match.awayTeamId
         );
         if (errors.length > 0) {
           return c.json({ error: errors.join(", ") }, 400);

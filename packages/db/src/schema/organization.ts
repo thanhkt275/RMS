@@ -581,6 +581,8 @@ export const tournamentMatches = sqliteTable("tournament_match", {
   format: text("format").$type<MatchFormat | null>(),
   homeScore: integer("home_score"),
   awayScore: integer("away_score"),
+  homeScoreBreakdown: text("home_score_breakdown", { mode: "json" }),
+  awayScoreBreakdown: text("away_score_breakdown", { mode: "json" }),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .default(sql`(unixepoch('now'))`),

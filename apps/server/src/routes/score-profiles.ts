@@ -5,9 +5,11 @@ import {
   scoreProfilePenaltyDirections,
   scoreProfilePenaltyTargets,
   scoreProfiles,
+  tournamentMatches,
+  tournamentStages,
   tournaments,
 } from "@rms-modern/db/schema/organization";
-import { desc, eq, sql } from "drizzle-orm";
+import { count, desc, eq, sql } from "drizzle-orm";
 import { type Context, Hono } from "hono";
 import { z } from "zod";
 
@@ -105,10 +107,70 @@ async function fetchScoreProfileById(
     return null;
   }
 
+  const stageUsage = await db
+    .select({ count: count(tournamentStages.id) })
+    .from(tournamentStages)
+    .where(eq(tournamentStages.scoreProfileId, profileId));
+
   return {
     ...rows[0],
-    usageCount: rows[0].usageCount ?? 0,
+    usageCount: (rows[0].usageCount ?? 0) + (stageUsage[0]?.count ?? 0),
   } as ScoreProfileRow;
+}
+
+async function hasCompletedMatches(profileId: string): Promise<boolean> {
+  // Check if profile is used by any stages with completed matches
+  const stagesWithProfile = await db
+    .select({ id: tournamentStages.id })
+    .from(tournamentStages)
+    .where(eq(tournamentStages.scoreProfileId, profileId));
+
+  const stageIds = stagesWithProfile.map((s) => s.id);
+
+  if (stageIds.length > 0) {
+    const completedMatches = await db
+      .select({ count: count(tournamentMatches.id) })
+      .from(tournamentMatches)
+      .where(
+        sql`${tournamentMatches.stageId} IN ${stageIds} AND ${tournamentMatches.status} = 'COMPLETED'`
+      );
+
+    if ((completedMatches[0]?.count ?? 0) > 0) {
+      return true;
+    }
+  }
+
+  // Check if profile is used by tournaments (with stages that have completed matches)
+  const tournamentsWithProfile = await db
+    .select({ id: tournaments.id })
+    .from(tournaments)
+    .where(eq(tournaments.scoreProfileId, profileId));
+
+  for (const tournament of tournamentsWithProfile) {
+    const stages = await db
+      .select({ id: tournamentStages.id })
+      .from(tournamentStages)
+      .where(
+        sql`${tournamentStages.tournamentId} = ${tournament.id} AND ${tournamentStages.scoreProfileId} IS NULL`
+      );
+
+    const tournamentStageIds = stages.map((s) => s.id);
+
+    if (tournamentStageIds.length > 0) {
+      const completedMatches = await db
+        .select({ count: count(tournamentMatches.id) })
+        .from(tournamentMatches)
+        .where(
+          sql`${tournamentMatches.stageId} IN ${tournamentStageIds} AND ${tournamentMatches.status} = 'COMPLETED'`
+        );
+
+      if ((completedMatches[0]?.count ?? 0) > 0) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 async function fetchScoreProfiles(search?: string): Promise<ScoreProfileRow[]> {
@@ -257,6 +319,21 @@ scoreProfilesRoute.patch("/:id", async (c: Context) => {
     }
 
     const payload = scoreProfileUpdateSchema.parse(await c.req.json());
+
+    // Check if trying to modify definition and profile has completed matches
+    if (payload.definition) {
+      const hasMatches = await hasCompletedMatches(id);
+      if (hasMatches) {
+        return c.json(
+          {
+            error:
+              "Cannot modify score profile definition. This profile is used by stages with completed matches. Create a new profile instead.",
+          },
+          400
+        );
+      }
+    }
+
     const updates: Record<string, unknown> = {
       updatedBy: session.user.id,
       updatedAt: new Date(),

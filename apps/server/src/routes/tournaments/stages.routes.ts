@@ -4,6 +4,7 @@ import {
   tournamentMatches,
   tournamentStageRankings,
   tournamentStages,
+  scoreProfiles,
   type tournamentStageTeams,
 } from "@rms-modern/db/schema/organization";
 import { and, asc, eq } from "drizzle-orm";
@@ -46,6 +47,21 @@ function finalizeStageResponse(
     stageResponse[0].warnings = warnings;
   }
   return stageResponse;
+}
+
+async function validateScoreProfileId(
+  scoreProfileId: string | null | undefined
+): Promise<string | null> {
+  if (!scoreProfileId) {
+    return null;
+  }
+  const profile = await (db as AppDB).query.scoreProfiles.findFirst({
+    where: eq(scoreProfiles.id, scoreProfileId),
+  });
+  if (!profile) {
+    throw new Error("Score profile not found");
+  }
+  return profile.id;
 }
 
 stagesRoute.get("/:tournamentId/stages", async (c: Context) => {
@@ -209,6 +225,20 @@ stagesRoute.post("/:tournamentId/stages", async (c: Context) => {
       return c.json({ error: "Tournament not found" }, 404);
     }
 
+    const resolvedScoreProfileId =
+      body.scoreProfileId ?? tournament.scoreProfileId ?? null;
+    try {
+      body.scoreProfileId = await validateScoreProfileId(resolvedScoreProfileId);
+    } catch (error) {
+      return c.json(
+        {
+          error:
+            error instanceof Error ? error.message : "Score profile not found",
+        },
+        400
+      );
+    }
+
     const newStage = createStageEntity(tournament.id, body);
 
     await (db as AppDB).insert(tournamentStages).values(newStage);
@@ -275,8 +305,20 @@ stagesRoute.patch("/:tournamentId/stages/:stageId", async (c: Context) => {
     if (body.configuration) {
       updateData.configuration = JSON.stringify(body.configuration);
     }
-    if (body.scoreProfileId) {
-      updateData.scoreProfileId = body.scoreProfileId;
+    if (body.scoreProfileId !== undefined) {
+      try {
+        updateData.scoreProfileId = await validateScoreProfileId(
+          body.scoreProfileId
+        );
+      } catch (error) {
+        return c.json(
+          {
+            error:
+              error instanceof Error ? error.message : "Score profile not found",
+          },
+          400
+        );
+      }
     }
 
     await (db as AppDB)

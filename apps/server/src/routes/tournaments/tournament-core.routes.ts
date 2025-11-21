@@ -4,6 +4,7 @@ import { type AppDB, db } from "@rms-modern/db";
 import { user } from "@rms-modern/db/schema/auth";
 import type { TournamentStatus } from "@rms-modern/db/schema/organization";
 import {
+  scoreProfiles,
   tournamentParticipations,
   tournamentResources,
   tournamentStages,
@@ -64,6 +65,26 @@ async function getAccess(
     return null;
   }
   return { session, isAnonymous };
+}
+
+type ScoreProfileRow = typeof scoreProfiles.$inferSelect;
+
+function serializeScoreProfile(profile: ScoreProfileRow) {
+  return {
+    id: profile.id,
+    name: profile.name,
+    description: profile.description,
+    definition: profile.definition,
+    createdAt: profile.createdAt.toISOString(),
+    updatedAt: profile.updatedAt.toISOString(),
+  };
+}
+
+async function fetchScoreProfile(id: string) {
+  const profile = await (db as AppDB).query.scoreProfiles.findFirst({
+    where: eq(scoreProfiles.id, id),
+  });
+  return profile ?? null;
 }
 
 tournamentCoreRoute.get("/", async (c: Context) => {
@@ -309,6 +330,13 @@ tournamentCoreRoute.post("/", async (c: Context) => {
 
     const body = tournamentPayloadSchema.parse(await c.req.json());
 
+    if (body.scoreProfileId) {
+      const profile = await fetchScoreProfile(body.scoreProfileId);
+      if (!profile) {
+        return c.json({ error: "Score profile not found" }, 400);
+      }
+    }
+
     const tournamentId = crypto.randomUUID();
     const slug = `${body.name
       .toLowerCase()
@@ -328,6 +356,7 @@ tournamentCoreRoute.post("/", async (c: Context) => {
       description: body.description,
       fieldCount: body.fieldCount,
       createdBy: session.user.id,
+      scoreProfileId: body.scoreProfileId ?? null,
     });
 
     return c.json({ id: tournamentId, slug, name: body.name }, 201);
@@ -358,6 +387,10 @@ tournamentCoreRoute.get("/:identifier", async (c: Context) => {
     if (!tournament) {
       return c.json({ error: "Tournament not found" }, 404);
     }
+
+    const scoreProfile = tournament.scoreProfileId
+      ? await fetchScoreProfile(tournament.scoreProfileId)
+      : null;
 
     // Fetch stages for this tournament
     const stages = await (db as AppDB).query.tournamentStages.findMany({
@@ -416,6 +449,7 @@ tournamentCoreRoute.get("/:identifier", async (c: Context) => {
         createdAt: r.createdAt.toISOString(),
       })),
       registeredTeams: participations.length,
+      scoreProfile: scoreProfile ? serializeScoreProfile(scoreProfile) : null,
     });
   } catch (error) {
     console.error("Failed to fetch tournament:", error);
@@ -448,22 +482,55 @@ tournamentCoreRoute.patch("/:identifier", async (c: Context) => {
       return c.json({ error: "Tournament not found" }, 404);
     }
 
+    if (body.scoreProfileId !== undefined && body.scoreProfileId !== null) {
+      const profile = await fetchScoreProfile(body.scoreProfileId);
+      if (!profile) {
+        return c.json({ error: "Score profile not found" }, 400);
+      }
+    }
+
+    const updatePayload: Partial<typeof tournaments.$inferInsert> = {
+      updatedAt: new Date(),
+      updatedBy: session.user.id,
+    };
+
+    if (body.name !== undefined) {
+      updatePayload.name = body.name;
+    }
+    if (body.status !== undefined) {
+      updatePayload.status = body.status;
+    }
+    if (body.location !== undefined) {
+      updatePayload.location = body.location;
+    }
+    if (body.startDate !== undefined) {
+      updatePayload.startDate = body.startDate ? new Date(body.startDate) : null;
+    }
+    if (body.endDate !== undefined) {
+      updatePayload.endDate = body.endDate ? new Date(body.endDate) : null;
+    }
+    if (body.season !== undefined) {
+      updatePayload.season = body.season;
+    }
+    if (body.logo !== undefined) {
+      updatePayload.logo = body.logo;
+    }
+    if (body.coverImage !== undefined) {
+      updatePayload.coverImage = body.coverImage;
+    }
+    if (body.description !== undefined) {
+      updatePayload.description = body.description;
+    }
+    if (body.fieldCount !== undefined) {
+      updatePayload.fieldCount = body.fieldCount;
+    }
+    if (body.scoreProfileId !== undefined) {
+      updatePayload.scoreProfileId = body.scoreProfileId ?? null;
+    }
+
     await (db as AppDB)
       .update(tournaments)
-      .set({
-        name: body.name,
-        status: body.status,
-        location: body.location,
-        startDate: body.startDate ? new Date(body.startDate) : null,
-        endDate: body.endDate ? new Date(body.endDate) : null,
-        season: body.season,
-        logo: body.logo,
-        coverImage: body.coverImage,
-        description: body.description,
-        fieldCount: body.fieldCount,
-        updatedAt: new Date(),
-        updatedBy: session.user.id,
-      })
+      .set(updatePayload)
       .where(eq(tournaments.id, tournament.id));
 
     return c.json({ success: true });

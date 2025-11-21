@@ -192,6 +192,7 @@ function EditScoreProfilePage() {
       <ScoreProfileForm
         initialValues={toFormValuesFromModel(profile)}
         isSubmitting={updateProfile.isPending}
+        key={scoreProfileId}
         onSubmit={handleSubmit}
         submitLabel="Save changes"
       />

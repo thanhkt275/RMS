@@ -252,14 +252,31 @@ export const matchGenerationSchema = z.object({
   teamIds: z.array(z.string().min(1)).optional(),
 });
 
+const scoreInputPartSchema = z.object({
+  partId: z.string().min(1),
+  value: z.union([z.number(), z.boolean()]),
+});
+
+const penaltyApplicationSchema = z.object({
+  penaltyId: z.string().min(1),
+  count: z.number().int().min(0),
+});
+
+const scoreInputSchema = z.object({
+  parts: z.array(scoreInputPartSchema),
+  penalties: z.array(penaltyApplicationSchema).optional(),
+});
+
 export const matchUpdateSchema = z.object({
   status: matchStatusSchema.optional(),
   homeScore: z.number().int().min(0).nullable().optional(),
   awayScore: z.number().int().min(0).nullable().optional(),
+  homeScoreInput: scoreInputSchema.optional(),
+  awayScoreInput: scoreInputSchema.optional(),
   scheduledAt: isoDateSchema.optional(),
-  homeTeamId: z.string().optional().nullable(), // Added
-  awayTeamId: z.string().optional().nullable(), // Added
-  metadata: z.record(z.string(), z.unknown()).optional().nullable(), // Added
+  homeTeamId: z.string().optional().nullable(),
+  awayTeamId: z.string().optional().nullable(),
+  metadata: z.record(z.string(), z.unknown()).optional().nullable(),
   robotStatus: matchRobotStatusSchema.optional().nullable(),
   matchType: matchTypeSchema.optional(),
   format: matchFormatSchema.optional().nullable(),

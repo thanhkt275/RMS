@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import { type AppDB, db } from "@rms-modern/db";
 import type { TournamentStageStatus } from "@rms-modern/db/schema/organization";
 import {
+  type ScoreProfileConfiguration,
+  scoreProfiles,
   type TournamentFieldRole,
   tournamentFieldRoles,
   tournamentMatches,
@@ -25,13 +27,17 @@ import type {
   StageResponse,
 } from "./types";
 
-// Simplified score profile type for match outcome calculations
-type ScoreProfile = {
-  id: string;
-  name: string;
+// Outcome points used for ranking calculations
+type OutcomePoints = {
   winPoints: number;
   drawPoints: number;
   lossPoints: number;
+};
+
+const DEFAULT_OUTCOME_POINTS: OutcomePoints = {
+  winPoints: 2,
+  drawPoints: 1,
+  lossPoints: 0,
 };
 
 /**
@@ -225,10 +231,67 @@ export async function assignStageTeams(stage: StageRecord, teamIds: string[]) {
   });
 }
 
+function deriveOutcomePoints(
+  definition: ScoreProfileConfiguration | null | undefined
+): OutcomePoints {
+  const overrides = (
+    definition as {
+      outcomePoints?: Partial<OutcomePoints>;
+    } | null
+  )?.outcomePoints;
+
+  if (!overrides) {
+    return DEFAULT_OUTCOME_POINTS;
+  }
+
+  return {
+    winPoints: overrides.winPoints ?? DEFAULT_OUTCOME_POINTS.winPoints,
+    drawPoints: overrides.drawPoints ?? DEFAULT_OUTCOME_POINTS.drawPoints,
+    lossPoints: overrides.lossPoints ?? DEFAULT_OUTCOME_POINTS.lossPoints,
+  };
+}
+
+async function resolveOutcomePointsForStage(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  stage:
+    | (StageRecord & {
+        scoreProfileId: string | null;
+      })
+    | null
+): Promise<OutcomePoints> {
+  if (!stage) {
+    return DEFAULT_OUTCOME_POINTS;
+  }
+
+  const tournamentScoreProfileId = await tx
+    .select({ scoreProfileId: tournaments.scoreProfileId })
+    .from(tournaments)
+    .where(eq(tournaments.id, stage.tournamentId))
+    .limit(1)
+    .then((rows) => rows[0]?.scoreProfileId ?? null);
+
+  const scoreProfileId = stage.scoreProfileId ?? tournamentScoreProfileId;
+  if (!scoreProfileId) {
+    return DEFAULT_OUTCOME_POINTS;
+  }
+
+  const profile = await (tx as AppDB).query.scoreProfiles.findFirst({
+    where: eq(scoreProfiles.id, scoreProfileId),
+  });
+
+  if (!profile) {
+    return DEFAULT_OUTCOME_POINTS;
+  }
+
+  return deriveOutcomePoints(profile.definition);
+}
+
 /**
- * Recalculates rankings for a stage.
+ * Recalculates stage rankings based on match outcomes.
+ * Supports both legacy raw scores and new score profile calculations.
+ * The homeScore/awayScore fields contain the final calculated totals,
+ * while homeScoreBreakdown/awayScoreBreakdown contain detailed part-by-part data.
  */
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Ranking calculation requires complex logic for stats tracking
 export async function recalculateStageRankings(
   tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
   stageId: string
@@ -252,33 +315,31 @@ export async function recalculateStageRankings(
     return;
   }
 
-  // Cast to include scoreProfileId which exists in schema but may not be in type inference
   const stage = stageRow as typeof stageRow & { scoreProfileId: string | null };
 
-  // Use a default scoring system: 3 points for win, 1 for draw, 0 for loss
-  // In a full implementation, fetch the actual score profile from the database
-  const scoreProfile: ScoreProfile = {
-    id: stage.scoreProfileId || "default",
-    name: "Default",
-    winPoints: 3,
-    drawPoints: 1,
-    lossPoints: 0,
+  const outcomePoints = await resolveOutcomePointsForStage(tx, stage);
+
+  type TeamStats = {
+    wins: number;
+    losses: number;
+    draws: number;
+    rankingPoints: number;
+    tieBreaker: number;
+    matchesPlayed: number;
+    totalFor: number;
+    totalAgainst: number;
   };
 
-  const teamStats = new Map<
-    string,
-    {
-      wins: number;
-      losses: number;
-      draws: number;
-      score: number;
-      tieBreaker: number;
-      matchesPlayed: number;
-    }
-  >();
+  const teamStats = new Map<string, TeamStats>();
 
   for (const match of matches) {
-    if (match.status === "COMPLETED" && match.homeScore && match.awayScore) {
+    if (
+      match.status === "COMPLETED" &&
+      match.homeScore !== null &&
+      match.homeScore !== undefined &&
+      match.awayScore !== null &&
+      match.awayScore !== undefined
+    ) {
       const homeTeamId = match.homeTeamId;
       const awayTeamId = match.awayTeamId;
 
@@ -289,21 +350,24 @@ export async function recalculateStageRankings(
       const outcome = determineMatchOutcome(
         match.homeScore,
         match.awayScore,
-        scoreProfile
+        outcomePoints
       );
 
-      // Update home team stats
       const homeStats = teamStats.get(homeTeamId) || {
         wins: 0,
         losses: 0,
         draws: 0,
-        score: 0,
+        rankingPoints: 0,
         tieBreaker: 0,
         matchesPlayed: 0,
+        totalFor: 0,
+        totalAgainst: 0,
       };
       homeStats.matchesPlayed += 1;
-      homeStats.score += outcome.homeTeamPoints;
-      homeStats.tieBreaker += match.homeScore - match.awayScore; // Score difference
+      homeStats.rankingPoints += outcome.homeTeamPoints;
+      homeStats.tieBreaker += match.homeScore - match.awayScore;
+      homeStats.totalFor += match.homeScore;
+      homeStats.totalAgainst += match.awayScore;
       if (outcome.result === "HOME_WIN") {
         homeStats.wins += 1;
       } else if (outcome.result === "AWAY_WIN") {
@@ -313,18 +377,21 @@ export async function recalculateStageRankings(
       }
       teamStats.set(homeTeamId, homeStats);
 
-      // Update away team stats
       const awayStats = teamStats.get(awayTeamId) || {
         wins: 0,
         losses: 0,
         draws: 0,
-        score: 0,
+        rankingPoints: 0,
         tieBreaker: 0,
         matchesPlayed: 0,
+        totalFor: 0,
+        totalAgainst: 0,
       };
       awayStats.matchesPlayed += 1;
-      awayStats.score += outcome.awayTeamPoints;
-      awayStats.tieBreaker += match.awayScore - match.homeScore; // Score difference
+      awayStats.rankingPoints += outcome.awayTeamPoints;
+      awayStats.tieBreaker += match.awayScore - match.homeScore;
+      awayStats.totalFor += match.awayScore;
+      awayStats.totalAgainst += match.homeScore;
       if (outcome.result === "AWAY_WIN") {
         awayStats.wins += 1;
       } else if (outcome.result === "HOME_WIN") {
@@ -336,28 +403,35 @@ export async function recalculateStageRankings(
     }
   }
 
-  // Convert map to array and sort for ranking
   const rankedTeams = Array.from(teamStats.entries())
     .map(([teamId, stats]) => ({ teamId, ...stats }))
     .sort((a, b) => {
-      if (b.score !== a.score) {
-        return b.score - a.score;
+      if (b.rankingPoints !== a.rankingPoints) {
+        return b.rankingPoints - a.rankingPoints;
       }
-      return b.tieBreaker - a.tieBreaker; // Tie-breaker: score difference
+      if (b.tieBreaker !== a.tieBreaker) {
+        return b.tieBreaker - a.tieBreaker;
+      }
+      return b.totalFor - a.totalFor;
     });
 
-  // Assign ranks and prepare for DB insert
   const rankingInserts = rankedTeams.map((team, index) => ({
     id: crypto.randomUUID(),
     stageId,
     organizationId: team.teamId,
     rank: index + 1,
-    score: team.score,
-    tieBreaker: team.tieBreaker,
+    gamesPlayed: team.matchesPlayed,
     wins: team.wins,
     losses: team.losses,
-    draws: team.draws,
-    matchesPlayed: team.matchesPlayed,
+    ties: team.draws,
+    rankingPoints: team.rankingPoints,
+    totalScore: team.totalFor,
+    loseRate: team.matchesPlayed ? team.losses / team.matchesPlayed : 0,
+    scoreData: JSON.stringify({
+      totalFor: team.totalFor,
+      totalAgainst: team.totalAgainst,
+      matches: [],
+    }),
   }));
 
   // Clear existing rankings and insert new ones
@@ -749,7 +823,7 @@ export function generateDoubleEliminationMatches(teamIds: string[]): {
 export function determineMatchOutcome(
   homeScore: number,
   awayScore: number,
-  scoreProfile: ScoreProfile
+  outcomePoints: OutcomePoints
 ) {
   let result: "HOME_WIN" | "AWAY_WIN" | "DRAW";
   let homeTeamPoints = 0;
@@ -757,16 +831,16 @@ export function determineMatchOutcome(
 
   if (homeScore > awayScore) {
     result = "HOME_WIN";
-    homeTeamPoints = scoreProfile.winPoints;
-    awayTeamPoints = scoreProfile.lossPoints;
+    homeTeamPoints = outcomePoints.winPoints;
+    awayTeamPoints = outcomePoints.lossPoints;
   } else if (awayScore > homeScore) {
     result = "AWAY_WIN";
-    homeTeamPoints = scoreProfile.lossPoints;
-    awayTeamPoints = scoreProfile.winPoints;
+    homeTeamPoints = outcomePoints.lossPoints;
+    awayTeamPoints = outcomePoints.winPoints;
   } else {
     result = "DRAW";
-    homeTeamPoints = scoreProfile.drawPoints;
-    awayTeamPoints = scoreProfile.drawPoints;
+    homeTeamPoints = outcomePoints.drawPoints;
+    awayTeamPoints = outcomePoints.drawPoints;
   }
 
   return { result, homeTeamPoints, awayTeamPoints };
